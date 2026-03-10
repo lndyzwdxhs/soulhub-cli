@@ -1,0 +1,43 @@
+import { Command } from "commander";
+import chalk from "chalk";
+import { loadConfig, CATEGORY_LABELS } from "../utils.js";
+
+export const listCommand = new Command("list")
+  .description("List installed agent templates")
+  .alias("ls")
+  .action(async () => {
+    try {
+      const config = loadConfig();
+
+      if (config.installed.length === 0) {
+        console.log(chalk.yellow("\n  No agents installed yet.\n"));
+        console.log(
+          chalk.dim("  Install one: soulhub install <name>")
+        );
+        console.log(
+          chalk.dim("  Browse all:  soulhub search\n")
+        );
+        return;
+      }
+
+      console.log(
+        chalk.bold(`\n  Installed agents (${config.installed.length}):\n`)
+      );
+
+      for (const agent of config.installed) {
+        const date = new Date(agent.installedAt).toLocaleDateString();
+        console.log(
+          `  ${chalk.cyan.bold(agent.name)} ${chalk.dim(`v${agent.version}`)}`
+        );
+        console.log(
+          `  ${chalk.dim("Installed:")} ${date}  ${chalk.dim("Location:")} ${agent.workspace}`
+        );
+        console.log();
+      }
+    } catch (error) {
+      console.error(
+        chalk.red(`Error: ${error instanceof Error ? error.message : error}`)
+      );
+      process.exit(1);
+    }
+  });
