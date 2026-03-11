@@ -1,7 +1,7 @@
 # SoulHub CLI - Makefile
 # 用于构建开发版本并打包，方便在 Linux 服务器上测试
 
-.PHONY: install build dev-build pack clean help typecheck local-install local-uninstall release
+.PHONY: install build dev-build pack clean help typecheck local-install local-uninstall release build-binary
 
 # 默认目标
 all: dev-build
@@ -48,6 +48,22 @@ clean:
 typecheck:
 	npm run typecheck
 
+# 构建当前平台的独立二进制（本地测试用）
+build-binary: build
+	@OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+	ARCH=$$(uname -m); \
+	case "$$OS" in \
+		darwin) OS="macos" ;; \
+	esac; \
+	case "$$ARCH" in \
+		x86_64) ARCH="x64" ;; \
+		aarch64|arm64) ARCH="arm64" ;; \
+	esac; \
+	echo "🔨 正在构建 soulhub-$$OS-$$ARCH ..."; \
+	npx @yao-pkg/pkg dist/index.js --target node20-$$OS-$$ARCH --output soulhub-$$OS-$$ARCH --compress GZip; \
+	echo "✅ 构建完成: soulhub-$$OS-$$ARCH"; \
+	ls -lh soulhub-$$OS-$$ARCH
+
 # 发版（用法: make release v=0.2.0）
 release:
 	@if [ -z "$(v)" ]; then \
@@ -88,6 +104,7 @@ help:
 	@echo "  make local-install  - 本地全局安装测试"
 	@echo "  make local-uninstall- 本地卸载"
 	@echo "  make typecheck    - TypeScript 类型检查"
+	@echo "  make build-binary - 构建当前平台的独立二进制"
 	@echo "  make clean        - 清理构建产物"
 	@echo "  make release v=x.y.z - 一键发版（修改版本+提交+推送，自动触发CI发布）"
 	@echo "  make help         - 显示此帮助信息"

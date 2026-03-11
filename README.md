@@ -4,6 +4,22 @@ SoulHub CLI — 用于安装和管理 OpenClaw AI Agent 人格模板的命令行
 
 ## 安装
 
+### 方式一：curl 一键安装（推荐）
+
+无需安装 Node.js，自动下载对应平台的二进制文件：
+
+```bash
+curl -fsSL https://soulhub-1251783334.cos.ap-guangzhou.myqcloud.com/install.sh | bash
+```
+
+指定版本安装：
+
+```bash
+SOULHUB_VERSION=v1.0.1 curl -fsSL https://soulhub-1251783334.cos.ap-guangzhou.myqcloud.com/install.sh | bash
+```
+
+### 方式二：npm 安装
+
 ```bash
 npm install -g soulhubcli
 ```

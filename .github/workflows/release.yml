@@ -12,6 +12,9 @@ jobs:
     # 仅在 commit message 以 "release:" 开头时触发
     if: startsWith(github.event.head_commit.message, 'release:')
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,7 +30,6 @@ jobs:
         id: version
         run: |
           COMMIT_MSG="${{ github.event.head_commit.message }}"
-          # 从 "release: v0.2.0" 中提取版本号
           VERSION=$(echo "$COMMIT_MSG" | grep -oP 'release:\s*v?\K[0-9]+\.[0-9]+\.[0-9]+[^\s]*' || true)
           if [ -z "$VERSION" ]; then
             echo "❌ 无法从 commit message 中提取版本号: $COMMIT_MSG"
@@ -69,11 +71,92 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # 生成 changelog（基于上一个 tag 到当前 tag 的 commit）
+  # 构建多平台二进制
+  build-binaries:
+    needs: release
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target_os: linux
+            target_arch: x64
+            pkg_target: node20-linux-x64
+          - os: ubuntu-latest
+            target_os: linux
+            target_arch: arm64
+            pkg_target: node20-linux-arm64
+          - os: macos-latest
+            target_os: macos
+            target_arch: x64
+            pkg_target: node20-macos-x64
+          - os: macos-latest
+            target_os: macos
+            target_arch: arm64
+            pkg_target: node20-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+      - run: npm run build
+
+      # 使用 pkg 打包为独立二进制
+      - name: Build binary with pkg
+        run: |
+          npx @yao-pkg/pkg dist/index.js \
+            --target ${{ matrix.pkg_target }} \
+            --output soulhub-${{ matrix.target_os }}-${{ matrix.target_arch }} \
+            --compress GZip
+
+      # 上传构建产物
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: soulhub-${{ matrix.target_os }}-${{ matrix.target_arch }}
+          path: soulhub-${{ matrix.target_os }}-${{ matrix.target_arch }}
+
+  # 创建 GitHub Release 并上传所有二进制
+  create-release:
+    needs: [release, build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 下载所有构建产物
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          merge-multiple: false
+
+      # 整理二进制文件并生成校验和
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          for dir in binaries/*/; do
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                cp "$file" release-assets/
+                chmod +x "release-assets/$(basename "$file")"
+              fi
+            done
+          done
+          cd release-assets
+          sha256sum * > checksums.txt
+          echo "📦 Release assets:"
+          ls -la
+
+      # 生成 changelog
       - name: Generate changelog
         id: changelog
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
+          TAG="${{ needs.release.outputs.tag }}"
           PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -n 1)
           if [ -z "$PREV_TAG" ]; then
             CHANGELOG=$(git log --oneline --pretty=format:"- %s (%h)" HEAD)
@@ -88,8 +171,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Release ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.release.outputs.tag }}
+          name: Release ${{ needs.release.outputs.tag }}
           body: |
             ## What's Changed
 
@@ -97,8 +180,25 @@ jobs:
 
             ## Install
 
+            **方式一：curl 一键安装（推荐）**
+
             ```bash
-            npm install -g soulhubcli@${{ steps.version.outputs.version }}
+            curl -fsSL https://raw.githubusercontent.com/lndyzwdxhs/soulhub-cli/main/scripts/install.sh | bash
+            ```
+
+            **方式二：npm 安装**
+
+            ```bash
+            npm install -g soulhubcli@${{ needs.release.outputs.version }}
+            ```
+
+            ## Checksums (SHA-256)
+
+            ```
+            $(cat release-assets/checksums.txt)
             ```
           draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          prerelease: ${{ contains(needs.release.outputs.version, '-') }}
+          files: |
+            release-assets/soulhub-*
+            release-assets/checksums.txt
