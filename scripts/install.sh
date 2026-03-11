@@ -17,6 +17,9 @@ REPO="lndyzwdxhs/soulhub-cli"
 BINARY_NAME="soulhub"
 INSTALL_DIR="/usr/local/bin"
 
+# COS 下载源（国内加速）
+COS_BASE_URL="https://soulhub-1251783334.cos.ap-guangzhou.myqcloud.com"
+
 info() {
     echo -e "${CYAN}ℹ${NC} $1"
 }
@@ -128,7 +131,9 @@ main() {
     # 构造下载 URL
     # 二进制文件命名规则: soulhub-<os>-<arch>
     local filename="soulhub-${os}-${arch}"
-    local download_url="https://github.com/${REPO}/releases/download/${version}/${filename}"
+    # COS 优先（国内快），GitHub 作为 fallback
+    local cos_url="${COS_BASE_URL}/releases/${version}/${filename}"
+    local github_url="https://github.com/${REPO}/releases/download/${version}/${filename}"
 
     info "正在下载 ${BOLD}${filename}${NC} ..."
 
@@ -139,9 +144,13 @@ main() {
 
     local tmp_file="${tmp_dir}/${BINARY_NAME}"
 
-    # 下载二进制文件
-    if ! download_file "$download_url" "$tmp_file"; then
-        error "下载失败: ${download_url}\n   请检查该版本是否存在对应平台的构建产物"
+    # 优先从 COS 下载，失败则 fallback 到 GitHub
+    if download_file "$cos_url" "$tmp_file" 2>/dev/null; then
+        info "从 COS 加速源下载成功"
+    elif download_file "$github_url" "$tmp_file" 2>/dev/null; then
+        info "从 GitHub 下载成功"
+    else
+        error "下载失败，请检查网络连接或该版本是否存在对应平台的构建产物\n   COS: ${cos_url}\n   GitHub: ${github_url}"
     fi
 
     # 赋予执行权限

@@ -1,6 +1,6 @@
 {
   "name": "soulhubcli",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "SoulHub CLI - Install and manage AI agent persona templates for OpenClaw",
   "type": "module",
   "bin": {
