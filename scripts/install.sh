@@ -161,6 +161,18 @@ main() {
         warn "二进制文件验证失败，但仍将继续安装"
     fi
 
+    # 清理其他路径下的旧版本，避免冲突
+    for old_path in /usr/bin /usr/local/bin; do
+        if [[ "$old_path" != "$INSTALL_DIR" ]] && [[ -f "${old_path}/${BINARY_NAME}" ]]; then
+            info "发现旧版本: ${old_path}/${BINARY_NAME}，正在清理..."
+            if [[ -w "$old_path" ]]; then
+                rm -f "${old_path}/${BINARY_NAME}"
+            else
+                sudo rm -f "${old_path}/${BINARY_NAME}"
+            fi
+        fi
+    done
+
     # 安装到目标目录
     info "正在安装到 ${BOLD}${INSTALL_DIR}/${BINARY_NAME}${NC} ..."
 
@@ -172,6 +184,9 @@ main() {
         sudo chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
     fi
 
+    # 刷新 bash 命令哈希缓存
+    hash -r 2>/dev/null || true
+
     # 验证安装
     if command -v "$BINARY_NAME" &> /dev/null; then
         echo ""
@@ -180,10 +195,13 @@ main() {
         echo -e "  运行以下命令开始使用："
         echo -e "  ${BOLD}soulhub --help${NC}"
         echo ""
+        echo -e "  ${YELLOW}提示：如果提示找不到命令，请先执行: ${BOLD}hash -r${NC}"
+        echo ""
     else
         echo ""
         warn "安装完成，但 ${BINARY_NAME} 不在 PATH 中"
-        echo -e "  请将 ${BOLD}${INSTALL_DIR}${NC} 添加到你的 PATH 环境变量："
+        echo -e "  请尝试执行: ${BOLD}hash -r && soulhub --help${NC}"
+        echo -e "  如果仍不可用，请将 ${BOLD}${INSTALL_DIR}${NC} 添加到你的 PATH 环境变量："
         echo -e "  ${BOLD}export PATH=\"${INSTALL_DIR}:\$PATH\"${NC}"
         echo ""
     fi

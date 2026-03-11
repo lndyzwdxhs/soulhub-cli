@@ -4,11 +4,11 @@
   "description": "SoulHub CLI - Install and manage AI agent persona templates for OpenClaw",
   "type": "module",
   "bin": {
-    "soulhub": "./dist/index.js"
+    "soulhub": "./dist/index.cjs"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean",
-    "dev": "tsup src/index.ts --format esm --watch",
+    "build": "tsup",
+    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
@@ -50,7 +50,6 @@
     "typescript": "^5.4.0"
   },
   "pkg": {
-    "scripts": "dist/**/*.js",
     "targets": [
       "node20"
     ],

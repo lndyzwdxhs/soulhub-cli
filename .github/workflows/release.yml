@@ -56,7 +56,7 @@ jobs:
 
       # 验证 CLI 可以正常运行
       - name: Verify CLI
-        run: node dist/index.js --help
+        run: node dist/index.cjs --help
 
       # 创建 git tag
       - name: Create git tag
@@ -107,7 +107,7 @@ jobs:
       # 使用 pkg 打包为独立二进制
       - name: Build binary with pkg
         run: |
-          npx @yao-pkg/pkg dist/index.js \
+          npx @yao-pkg/pkg dist/index.cjs \
             --target ${{ matrix.pkg_target }} \
             --output soulhub-${{ matrix.target_os }}-${{ matrix.target_arch }} \
             --compress GZip
@@ -176,6 +176,9 @@ jobs:
           for file in release-assets/*; do
             coscmd upload "$file" "latest/$(basename "$file")"
           done
+          # 上传安装脚本（每次发布都更新）
+          echo "📤 上传安装脚本 install.sh"
+          coscmd upload scripts/install.sh install.sh
           echo "✅ COS 上传完成"
 
       # 生成 changelog

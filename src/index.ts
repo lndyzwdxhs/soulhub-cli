@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { Command } from "commander";
 import { searchCommand } from "./commands/search.js";
 import { infoCommand } from "./commands/info.js";

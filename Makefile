@@ -60,7 +60,7 @@ build-binary: build
 		aarch64|arm64) ARCH="arm64" ;; \
 	esac; \
 	echo "🔨 正在构建 soulhub-$$OS-$$ARCH ..."; \
-	npx @yao-pkg/pkg dist/index.js --target node20-$$OS-$$ARCH --output soulhub-$$OS-$$ARCH --compress GZip; \
+	npx @yao-pkg/pkg dist/index.cjs --target node20-$$OS-$$ARCH --output soulhub-$$OS-$$ARCH --compress GZip; \
 	echo "✅ 构建完成: soulhub-$$OS-$$ARCH"; \
 	ls -lh soulhub-$$OS-$$ARCH
 
@@ -81,7 +81,7 @@ release:
 	@# 构建并验证
 	npm run typecheck
 	npm run build
-	@node dist/index.js --help > /dev/null 2>&1 && echo "✅ CLI 验证通过" || (echo "❌ CLI 验证失败" && exit 1)
+	@node dist/index.cjs --help > /dev/null 2>&1 && echo "✅ CLI 验证通过" || (echo "❌ CLI 验证失败" && exit 1)
 	@# 提交并推送（commit message 以 release: 开头会自动触发发布）
 	git add .
 	git commit -m "release: v$(v)"
