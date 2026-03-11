@@ -1,6 +1,6 @@
 {
-  "name": "soulhub",
-  "version": "1.0.0",
+  "name": "soulhubcli",
+  "version": "1.0.1",
   "description": "SoulHub CLI - Install and manage AI agent persona templates for OpenClaw",
   "type": "module",
   "bin": {
@@ -29,7 +29,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/soulhub-community/soulhub-cli"
+    "url": "https://github.com/lndyzwdxhs/soulhub-cli.git"
   },
   "engines": {
     "node": ">=18.0.0"

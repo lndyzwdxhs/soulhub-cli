@@ -18,15 +18,15 @@ build:
 dev-build: install build pack
 	@echo ""
 	@echo "✅ 开发版本构建完成！"
-	@echo "📦 产物位置: $$(ls -1 soulhub-*.tgz 2>/dev/null)"
+	@echo "📦 产物位置: $$(ls -1 soulhubcli-*.tgz 2>/dev/null)"
 	@echo ""
 	@echo "🚀 在 Linux 服务器上安装测试："
-	@echo "   scp soulhub-*.tgz user@your-server:~/"
+	@echo "   scp soulhubcli-*.tgz user@your-server:~/"
 	@echo "   ssh user@your-server"
-	@echo "   npm install -g ./soulhub-*.tgz"
+	@echo "   npm install -g ./soulhubcli-*.tgz"
 	@echo "   soulhub --help"
 
-# 打包为 tgz（npm pack 会生成 soulhub-<version>.tgz）
+# 打包为 tgz（npm pack 会生成 soulhubcli-<version>.tgz）
 pack:
 	npm pack
 
@@ -37,12 +37,12 @@ local-install: build
 
 # 本地卸载
 local-uninstall:
-	npm uninstall -g soulhub
+	npm uninstall -g soulhubcli
 
 # 清理构建产物
 clean:
 	rm -rf dist
-	rm -f soulhub-*.tgz
+	rm -f soulhubcli-*.tgz
 
 # 类型检查
 typecheck:
@@ -73,7 +73,7 @@ release:
 	@echo ""
 	@echo "✅ 版本 v$(v) 已发布！"
 	@echo "📦 GitHub Actions 将自动构建并发布到 npm"
-	@echo "🔗 查看进度: https://github.com/soulhub-community/soulhub-cli/actions"
+	@echo "🔗 查看进度: https://github.com/lndyzwdxhs/soulhub-cli/actions"
 
 # 帮助信息
 help:

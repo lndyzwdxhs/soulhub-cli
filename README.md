@@ -5,13 +5,13 @@ SoulHub CLI — 用于安装和管理 OpenClaw AI Agent 人格模板的命令行
 ## 安装
 
 ```bash
-npm install -g soulhub
+npm install -g soulhubcli
 ```
 
 或使用 npx 直接运行：
 
 ```bash
-npx soulhub <command>
+npx soulhubcli <command>
 ```
 
 ## 命令一览

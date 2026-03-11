@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [master]
+    branches: [main]
 
 permissions:
   contents: write
@@ -98,7 +98,7 @@ jobs:
             ## Install
 
             ```bash
-            npm install -g soulhub@${{ steps.version.outputs.version }}
+            npm install -g soulhubcli@${{ steps.version.outputs.version }}
             ```
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
