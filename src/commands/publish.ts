@@ -4,6 +4,7 @@ import ora from "ora";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import { logger } from "../logger.js";
 
 export const publishCommand = new Command("publish")
   .description("Publish an agent template to the SoulHub community")
@@ -110,9 +111,11 @@ export const publishCommand = new Command("publish")
       );
       console.log();
     } catch (error) {
+      logger.errorObj("Publish command failed", error);
       console.error(
         chalk.red(`Error: ${error instanceof Error ? error.message : error}`)
       );
+      console.error(chalk.dim(`  See logs: ${logger.getTodayLogFile()}`));
       process.exit(1);
     }
   });

@@ -162,7 +162,7 @@ jobs:
           SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
           BUCKET: soulhub-1251783334
           REGION: ap-guangzhou
-        run: coscmd config -a $SECRET_ID -s $SECRET_KEY -b $BUCKET -r $REGION
+        run: coscmd config -a $SECRET_ID -s $SECRET_KEY -b $BUCKET -r $REGION -e cos.accelerate.myqcloud.com
 
       - name: Upload binaries to COS
         run: |

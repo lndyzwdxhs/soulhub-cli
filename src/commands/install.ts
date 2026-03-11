@@ -4,6 +4,7 @@ import ora from "ora";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import { logger } from "../logger.js";
 import {
   fetchIndex,
   fetchAgentFile,
@@ -15,14 +16,18 @@ import {
   recordInstall,
   checkOpenClawInstalled,
   backupAgentWorkspace,
+  backupAllWorkerWorkspaces,
   registerAgentToOpenClaw,
   readSoulHubPackage,
   detectPackageKind,
   configureMultiAgentCommunication,
   addAgentToOpenClawConfig,
   restartOpenClawGateway,
+  createBackupRecord,
+  addBackupItem,
+  commitBackupRecord,
 } from "../utils.js";
-import type { SoulHubPackage } from "../types.js";
+import type { SoulHubPackage, BackupRecord } from "../types.js";
 
 export const installCommand = new Command("install")
   .description("Install an agent or team from the SoulHub registry")
@@ -53,9 +58,11 @@ export const installCommand = new Command("install")
         process.exit(1);
       }
     } catch (error) {
+      logger.errorObj("Install command failed", error);
       console.error(
         chalk.red(`Error: ${error instanceof Error ? error.message : error}`)
       );
+      console.error(chalk.dim(`  See logs: ${logger.getTodayLogFile()}`));
       process.exit(1);
     }
   });
@@ -83,11 +90,14 @@ async function installFromRegistry(
 
   if (agent && !recipe) {
     spinner.stop();
+    logger.info(`Installing single agent from registry: ${name}`);
     await installSingleAgent(name, targetDir, clawDir);
   } else if (recipe) {
     spinner.stop();
+    logger.info(`Installing team recipe from registry: ${name}`);
     await installRecipeFromRegistry(name, recipe, targetDir, clawDir);
   } else {
+    logger.warn(`"${name}" not found in registry`);
     spinner.fail(`"${name}" not found in registry.`);
     console.log(chalk.dim("  Use 'soulhub search' to find available agents and teams."));
   }
@@ -144,9 +154,13 @@ async function installSingleAgent(
   }
 
   // 4. 检查主 agent 是否已存在，备份
+  const resolvedClawDirForBackup = findOpenClawDir(clawDir)!;
+  const backupRecord = !targetDir
+    ? createBackupRecord("single-agent", name, resolvedClawDirForBackup)
+    : null;
+
   if (!targetDir) {
-    const resolvedClawDir = findOpenClawDir(clawDir)!;
-    const mainCheck = checkMainAgentExists(resolvedClawDir);
+    const mainCheck = checkMainAgentExists(resolvedClawDirForBackup);
     if (mainCheck.hasContent) {
       spinner.warn(
         `Existing main agent detected. Backing up workspace...`
@@ -154,6 +168,13 @@ async function installSingleAgent(
       const backupDir = backupAgentWorkspace(workspaceDir);
       if (backupDir) {
         console.log(chalk.yellow(`  ⚠ Existing main agent backed up to: ${backupDir}`));
+        addBackupItem(backupRecord!, {
+          originalPath: workspaceDir,
+          backupPath: backupDir,
+          method: "cp",
+          role: "main",
+          agentId: "main",
+        });
       }
     }
   } else {
@@ -187,6 +208,13 @@ async function installSingleAgent(
   // 8. 记录安装
   recordInstall(name, agent.version, workspaceDir);
 
+  // 记录备份信息
+  if (backupRecord) {
+    backupRecord.installedMainAgent = name;
+    commitBackupRecord(backupRecord);
+  }
+
+  logger.info(`Single agent installed: ${name}`, { version: agent.version, workspace: workspaceDir });
   spinner.succeed(
     `${chalk.cyan.bold(agent.displayName)} installed as main agent!`
   );
@@ -245,10 +273,36 @@ async function installRecipeFromRegistry(
     return;
   }
 
+  // 2.5 备份存量子 agent（mv 方式）
+  const recipeBackupRecord = !targetDir
+    ? createBackupRecord("team-registry", name, resolvedClawDir)
+    : null;
+
+  if (!targetDir) {
+    spinner.text = "Backing up existing worker agents...";
+    const backupResults = backupAllWorkerWorkspaces(resolvedClawDir);
+    for (const { name: dirName, backupDir } of backupResults) {
+      logger.info(`Existing worker backed up (mv)`, { dirName, backupDir });
+      console.log(chalk.yellow(`  ⚠ Existing ${dirName} moved to: ${backupDir}`));
+      // 从目录名提取 agentId：workspace-xxx → xxx
+      const agentId = dirName.replace(/^workspace-/, "");
+      addBackupItem(recipeBackupRecord!, {
+        originalPath: path.join(resolvedClawDir, dirName),
+        backupPath: backupDir,
+        method: "mv",
+        role: "worker",
+        agentId,
+      });
+    }
+    if (backupResults.length > 0) {
+      console.log(chalk.dim(`  ${backupResults.length} existing worker(s) backed up.`));
+    }
+  }
+
   // 3. 安装 dispatcher（主 agent）
   if (pkg.dispatcher) {
     spinner.text = `Installing dispatcher ${chalk.blue(pkg.dispatcher.name)}...`;
-    await installDispatcher(pkg.dispatcher, resolvedClawDir, clawDir, targetDir, spinner);
+    await installDispatcher(pkg.dispatcher, resolvedClawDir, clawDir, targetDir, spinner, recipeBackupRecord);
   }
 
   // 4. 安装 worker agents
@@ -264,12 +318,6 @@ async function installRecipeFromRegistry(
     const workerDir = targetDir
       ? path.join(resolvedClawDir, `workspace-${agentId}`)
       : getWorkspaceDir(resolvedClawDir, agentId);
-
-    // 备份
-    const backupDir = backupAgentWorkspace(workerDir);
-    if (backupDir) {
-      console.log(chalk.yellow(`  ⚠ Existing ${agentId} backed up to: ${backupDir}`));
-    }
 
     // 注册 worker agent
     if (!targetDir) {
@@ -302,6 +350,14 @@ async function installRecipeFromRegistry(
     configureMultiAgentCommunication(resolvedClawDir, dispatcherId, workerIds);
   }
 
+  // 记录备份信息
+  if (recipeBackupRecord) {
+    recipeBackupRecord.installedWorkerIds = workerIds;
+    recipeBackupRecord.installedMainAgent = pkg.dispatcher?.name || null;
+    commitBackupRecord(recipeBackupRecord);
+  }
+
+  logger.info(`Team installed from registry: ${name}`, { dispatcher: pkg.dispatcher?.name, workers: workerIds });
   spinner.succeed(
     `Team ${chalk.cyan.bold(recipe.displayName)} installed! (1 dispatcher + ${workerIds.length} workers)`
   );
@@ -333,14 +389,22 @@ async function installFromSource(
 
   if (source.startsWith("http://") || source.startsWith("https://")) {
     // URL 来源 — 下载到临时目录
+    logger.info(`Downloading package from URL: ${source}`);
     spinner.text = "Downloading package...";
-    const response = await fetch(source);
+    const response = await fetch(source, {
+      headers: {
+        "User-Agent": "soulhub-cli",
+        "Accept": "application/zip, application/octet-stream",
+      },
+    });
     if (!response.ok) {
+      logger.error(`Download failed`, { url: source, status: response.status, statusText: response.statusText });
       spinner.fail(`Failed to download: ${response.statusText}`);
       return;
     }
     // 下载 ZIP 文件
     const contentType = response.headers.get("content-type") || "";
+    logger.debug(`Response content-type: ${contentType}`);
     if (contentType.includes("zip") || source.endsWith(".zip")) {
       const JSZip = (await import("jszip")).default;
       const arrayBuffer = await response.arrayBuffer();
@@ -350,6 +414,7 @@ async function installFromSource(
       await extractZipToDir(zip, tempDir);
       packageDir = tempDir;
     } else {
+      logger.error(`Unsupported content type from URL`, { url: source, contentType });
       spinner.fail("Unsupported URL content type. Expected ZIP file.");
       return;
     }
@@ -374,6 +439,7 @@ async function installFromSource(
 
   // 自动识别包类型
   const kind = detectPackageKind(packageDir);
+  logger.info(`Detected package type: ${kind}`, { packageDir });
   spinner.text = `Detected package type: ${chalk.blue(kind)}`;
 
   if (kind === "agent") {
@@ -383,6 +449,7 @@ async function installFromSource(
     spinner.stop();
     await installTeamFromDir(packageDir, targetDir, clawDir);
   } else {
+    logger.error(`Cannot determine package type`, { packageDir, files: fs.existsSync(packageDir) ? fs.readdirSync(packageDir) : [] });
     spinner.fail("Cannot determine package type. Expected soulhub.yaml or IDENTITY.md.");
   }
 
@@ -430,6 +497,10 @@ async function installSingleAgentFromDir(
   }
 
   // 3. 备份
+  const localBackupRecord = !targetDir
+    ? createBackupRecord("single-agent-local", agentName, findOpenClawDir(clawDir)!)
+    : null;
+
   if (!targetDir) {
     const resolvedClawDir = findOpenClawDir(clawDir)!;
     const mainCheck = checkMainAgentExists(resolvedClawDir);
@@ -438,6 +509,13 @@ async function installSingleAgentFromDir(
       const backupDir = backupAgentWorkspace(workspaceDir);
       if (backupDir) {
         console.log(chalk.yellow(`  ⚠ Existing main agent backed up to: ${backupDir}`));
+        addBackupItem(localBackupRecord!, {
+          originalPath: workspaceDir,
+          backupPath: backupDir,
+          method: "cp",
+          role: "main",
+          agentId: "main",
+        });
       }
     }
   }
@@ -459,6 +537,13 @@ async function installSingleAgentFromDir(
 
   recordInstall(agentName, pkg?.version || "local", workspaceDir);
 
+  // 记录备份信息
+  if (localBackupRecord) {
+    localBackupRecord.installedMainAgent = agentName;
+    commitBackupRecord(localBackupRecord);
+  }
+
+  logger.info(`Single agent installed from dir: ${agentName}`, { source: packageDir, workspace: workspaceDir });
   spinner.succeed(`${chalk.cyan.bold(agentName)} installed as main agent!`);
   console.log();
   console.log(`  ${chalk.dim("Location:")} ${workspaceDir}`);
@@ -505,6 +590,31 @@ async function installTeamFromDir(
     return;
   }
 
+  // 2.5 备份存量子 agent（mv 方式）
+  const teamBackupRecord = !targetDir
+    ? createBackupRecord("team-local", pkg.name, resolvedClawDir)
+    : null;
+
+  if (!targetDir) {
+    spinner.text = "Backing up existing worker agents...";
+    const backupResults = backupAllWorkerWorkspaces(resolvedClawDir);
+    for (const { name: dirName, backupDir } of backupResults) {
+      logger.info(`Existing worker backed up (mv)`, { dirName, backupDir });
+      console.log(chalk.yellow(`  ⚠ Existing ${dirName} moved to: ${backupDir}`));
+      const agentId = dirName.replace(/^workspace-/, "");
+      addBackupItem(teamBackupRecord!, {
+        originalPath: path.join(resolvedClawDir, dirName),
+        backupPath: backupDir,
+        method: "mv",
+        role: "worker",
+        agentId,
+      });
+    }
+    if (backupResults.length > 0) {
+      console.log(chalk.dim(`  ${backupResults.length} existing worker(s) backed up.`));
+    }
+  }
+
   // 3. 安装 dispatcher（主 agent → workspace）
   if (pkg.dispatcher) {
     spinner.text = `Installing dispatcher ${chalk.blue(pkg.dispatcher.name)}...`;
@@ -521,6 +631,15 @@ async function installTeamFromDir(
         const backupDir = backupAgentWorkspace(mainWorkspace);
         if (backupDir) {
           console.log(chalk.yellow(`  ⚠ Existing main agent backed up to: ${backupDir}`));
+          if (teamBackupRecord) {
+            addBackupItem(teamBackupRecord, {
+              originalPath: mainWorkspace,
+              backupPath: backupDir,
+              method: "cp",
+              role: "main",
+              agentId: "main",
+            });
+          }
         }
       }
     }
@@ -556,13 +675,7 @@ async function installTeamFromDir(
       ? path.join(resolvedClawDir, `workspace-${agentId}`)
       : getWorkspaceDir(resolvedClawDir, agentId);
 
-    // 备份
-    const backupDir = backupAgentWorkspace(workerWorkspace);
-    if (backupDir) {
-      console.log(chalk.yellow(`  ⚠ Existing ${agentId} backed up to: ${backupDir}`));
-    }
-
-    // 注册 worker
+    // 注册 worker（存量子 agent 已在步骤 2.5 中通过 mv 备份并移走）
     if (!targetDir) {
       const regResult = registerAgentToOpenClaw(agentId, workerWorkspace, clawDir);
       if (!regResult.success) {
@@ -589,6 +702,14 @@ async function installTeamFromDir(
     configureMultiAgentCommunication(resolvedClawDir, "main", workerIds);
   }
 
+  // 记录备份信息
+  if (teamBackupRecord) {
+    teamBackupRecord.installedWorkerIds = workerIds;
+    teamBackupRecord.installedMainAgent = pkg.dispatcher?.name || null;
+    commitBackupRecord(teamBackupRecord);
+  }
+
+  logger.info(`Team installed from dir: ${pkg.name}`, { dispatcher: pkg.dispatcher?.name, workers: workerIds, source: packageDir });
   spinner.succeed(
     `Team ${chalk.cyan.bold(pkg.name)} installed! (${pkg.dispatcher ? "1 dispatcher + " : ""}${workerIds.length} workers)`
   );
@@ -683,7 +804,8 @@ async function installDispatcher(
   resolvedClawDir: string,
   clawDir?: string,
   targetDir?: string,
-  spinner?: ReturnType<typeof ora>
+  spinner?: ReturnType<typeof ora>,
+  backupRecord?: BackupRecord | null
 ): Promise<void> {
   const mainWorkspace = targetDir
     ? path.join(resolvedClawDir, "workspace")
@@ -697,6 +819,15 @@ async function installDispatcher(
       const backupDir = backupAgentWorkspace(mainWorkspace);
       if (backupDir) {
         console.log(chalk.yellow(`  ⚠ Existing main agent backed up to: ${backupDir}`));
+        if (backupRecord) {
+          addBackupItem(backupRecord, {
+            originalPath: mainWorkspace,
+            backupPath: backupDir,
+            method: "cp",
+            role: "main",
+            agentId: "main",
+          });
+        }
       }
     }
   }

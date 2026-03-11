@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { loadConfig, CATEGORY_LABELS } from "../utils.js";
+import { logger } from "../logger.js";
 
 export const listCommand = new Command("list")
   .description("List installed agent templates")
@@ -35,9 +36,11 @@ export const listCommand = new Command("list")
         console.log();
       }
     } catch (error) {
+      logger.errorObj("List command failed", error);
       console.error(
         chalk.red(`Error: ${error instanceof Error ? error.message : error}`)
       );
+      console.error(chalk.dim(`  See logs: ${logger.getTodayLogFile()}`));
       process.exit(1);
     }
   });

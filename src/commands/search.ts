@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { fetchIndex, CATEGORY_LABELS } from "../utils.js";
+import { logger } from "../logger.js";
 
 export const searchCommand = new Command("search")
   .description("Search for agent templates in the SoulHub registry")
@@ -77,9 +78,11 @@ export const searchCommand = new Command("search")
       );
       console.log();
     } catch (error) {
+      logger.errorObj("Search command failed", error);
       console.error(
         chalk.red(`Error: ${error instanceof Error ? error.message : error}`)
       );
+      console.error(chalk.dim(`  See logs: ${logger.getTodayLogFile()}`));
       process.exit(1);
     }
   });

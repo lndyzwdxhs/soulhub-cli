@@ -9,6 +9,7 @@ import {
   fetchIndex,
   fetchAgentFile,
 } from "../utils.js";
+import { logger } from "../logger.js";
 
 export const updateCommand = new Command("update")
   .description("Update installed agent templates to latest versions")
@@ -83,13 +84,16 @@ export const updateCommand = new Command("update")
       if (updated === 0) {
         spinner.succeed("All agents are up to date.");
       } else {
+        logger.info(`Updated ${updated} agent(s)`);
         spinner.succeed(`Updated ${updated} agent(s).`);
       }
       console.log();
     } catch (error) {
+      logger.errorObj("Update command failed", error);
       console.error(
         chalk.red(`Error: ${error instanceof Error ? error.message : error}`)
       );
+      console.error(chalk.dim(`  See logs: ${logger.getTodayLogFile()}`));
       process.exit(1);
     }
   });

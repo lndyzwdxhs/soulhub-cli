@@ -8,7 +8,11 @@ import type {
   InstalledAgent,
   SoulHubPackage,
   OpenClawConfig,
+  BackupRecord,
+  BackupItem,
+  BackupManifest,
 } from "./types.js";
+import { logger } from "./logger.js";
 
 // Registry base URL
 const DEFAULT_REGISTRY_URL =
@@ -23,8 +27,10 @@ export function getRegistryUrl(): string {
  */
 export async function fetchIndex(): Promise<AgentIndex> {
   const url = `${getRegistryUrl()}/index.json`;
+  logger.debug(`Fetching registry index`, { url });
   const response = await fetch(url);
   if (!response.ok) {
+    logger.error(`Failed to fetch registry index`, { url, status: response.status, statusText: response.statusText });
     throw new Error(`Failed to fetch registry index: ${response.statusText}`);
   }
   return (await response.json()) as AgentIndex;
@@ -38,8 +44,10 @@ export async function fetchAgentFile(
   fileName: string
 ): Promise<string> {
   const url = `${getRegistryUrl()}/agents/${agentName}/${fileName}`;
+  logger.debug(`Fetching agent file`, { agentName, fileName, url });
   const response = await fetch(url);
   if (!response.ok) {
+    logger.error(`Failed to fetch agent file`, { agentName, fileName, url, status: response.status });
     throw new Error(
       `Failed to fetch ${fileName} for ${agentName}: ${response.statusText}`
     );
@@ -55,8 +63,10 @@ export async function fetchRecipeFile(
   fileName: string
 ): Promise<string> {
   const url = `${getRegistryUrl()}/recipes/${recipeName}/${fileName}`;
+  logger.debug(`Fetching recipe file`, { recipeName, fileName, url });
   const response = await fetch(url);
   if (!response.ok) {
+    logger.error(`Failed to fetch recipe file`, { recipeName, fileName, url, status: response.status });
     throw new Error(
       `Failed to fetch ${fileName} for recipe ${recipeName}: ${response.statusText}`
     );
@@ -155,6 +165,7 @@ export function recordInstall(
     workspace,
   });
   saveConfig(config);
+  logger.debug(`Recorded install`, { name, version, workspace });
 }
 
 /**
@@ -453,8 +464,67 @@ export function backupAgentWorkspace(workspaceDir: string): string | null {
 
   // 复制文件夹到备份目录（保持原目录不变）
   fs.cpSync(workspaceDir, backupDir, { recursive: true });
+  logger.info(`Workspace backed up`, { from: workspaceDir, to: backupDir });
 
   return backupDir;
+}
+
+/**
+ * 备份 agent 工作目录（mv 移动方式）
+ * 将 workspace 目录直接移动到 ~/.openclaw/agentbackup/ 下，原目录被移走
+ * 适用于子 agent 备份场景，避免磁盘空间翻倍
+ */
+export function moveBackupAgentWorkspace(workspaceDir: string): string | null {
+  if (!fs.existsSync(workspaceDir)) {
+    return null; // 目录不存在，无需备份
+  }
+
+  // 检查目录中是否有内容
+  const entries = fs.readdirSync(workspaceDir);
+  if (entries.length === 0) {
+    return null; // 空目录，无需备份
+  }
+
+  // 在 openclaw 目录下创建 agentbackup 目录
+  const clawDir = path.dirname(workspaceDir);
+  const backupBaseDir = path.join(clawDir, "agentbackup");
+  if (!fs.existsSync(backupBaseDir)) {
+    fs.mkdirSync(backupBaseDir, { recursive: true });
+  }
+
+  // 确定备份目标路径，如果已存在同名目录则追加时间戳
+  const dirName = path.basename(workspaceDir);
+  let backupDir = path.join(backupBaseDir, dirName);
+  if (fs.existsSync(backupDir)) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    backupDir = path.join(backupBaseDir, `${dirName}-${timestamp}`);
+  }
+
+  // 移动文件夹到备份目录（原目录被移走）
+  fs.renameSync(workspaceDir, backupDir);
+  logger.info(`Workspace moved to backup`, { from: workspaceDir, to: backupDir });
+
+  return backupDir;
+}
+
+/**
+ * 批量备份存量子 agent 工作目录（mv 移动方式）
+ * 在安装多 agent 团队前调用，把所有 workspace-* 目录移动到 agentbackup/
+ * @returns 备份结果列表
+ */
+export function backupAllWorkerWorkspaces(clawDir: string): { name: string; backupDir: string }[] {
+  const results: { name: string; backupDir: string }[] = [];
+  const workerDirs = listAgentWorkspaces(clawDir);
+
+  for (const dirName of workerDirs) {
+    const fullPath = path.join(clawDir, dirName);
+    const backupDir = moveBackupAgentWorkspace(fullPath);
+    if (backupDir) {
+      results.push({ name: dirName, backupDir });
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -473,6 +543,114 @@ export function listAgentWorkspaces(clawDir: string): string[] {
       entry.startsWith("workspace-")
     );
   });
+}
+
+// ==========================================
+// 备份记录管理（用于回滚）
+// ==========================================
+
+/** 备份记录文件路径 */
+function getBackupManifestPath(): string {
+  const home = process.env.HOME || "~";
+  return path.join(home, ".soulhub", "backups.json");
+}
+
+/**
+ * 读取所有备份记录
+ */
+export function loadBackupManifest(): BackupManifest {
+  const manifestPath = getBackupManifestPath();
+  if (fs.existsSync(manifestPath)) {
+    try {
+      return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as BackupManifest;
+    } catch {
+      return { records: [] };
+    }
+  }
+  return { records: [] };
+}
+
+/**
+ * 保存备份记录
+ */
+export function saveBackupManifest(manifest: BackupManifest): void {
+  const manifestPath = getBackupManifestPath();
+  const manifestDir = path.dirname(manifestPath);
+  if (!fs.existsSync(manifestDir)) {
+    fs.mkdirSync(manifestDir, { recursive: true });
+  }
+  // 只保留最近 50 条记录，防止文件无限增长
+  manifest.records = manifest.records.slice(0, 50);
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+}
+
+/**
+ * 生成备份记录 ID
+ */
+function generateBackupId(): string {
+  const now = new Date();
+  const ts = now.toISOString().replace(/[:.\-T]/g, "").slice(0, 14); // YYYYMMDDHHmmss
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${ts}-${rand}`;
+}
+
+/**
+ * 创建一个新的备份记录（初始状态，安装过程中逐步填充 items）
+ */
+export function createBackupRecord(
+  installType: BackupRecord["installType"],
+  packageName: string,
+  clawDir: string
+): BackupRecord {
+  // 快照 openclaw.json
+  let openclawJsonSnapshot: string | null = null;
+  const configPath = path.join(clawDir, "openclaw.json");
+  if (fs.existsSync(configPath)) {
+    try {
+      openclawJsonSnapshot = fs.readFileSync(configPath, "utf-8");
+    } catch {
+      // 读取失败，忽略
+    }
+  }
+
+  return {
+    id: generateBackupId(),
+    installType,
+    packageName,
+    createdAt: new Date().toISOString(),
+    clawDir,
+    openclawJsonSnapshot,
+    items: [],
+    installedWorkerIds: [],
+    installedMainAgent: null,
+  };
+}
+
+/**
+ * 向备份记录中添加一个备份项
+ */
+export function addBackupItem(
+  record: BackupRecord,
+  item: BackupItem
+): void {
+  record.items.push(item);
+}
+
+/**
+ * 保存备份记录到 manifest 文件（安装完成后调用）
+ */
+export function commitBackupRecord(record: BackupRecord): void {
+  // 如果没有任何备份项且没有安装新 worker，跳过记录
+  if (record.items.length === 0 && record.installedWorkerIds.length === 0 && !record.installedMainAgent) {
+    logger.debug("No backup items to record, skipping.");
+    return;
+  }
+
+  const manifest = loadBackupManifest();
+  // 插入到列表头部（最新的在前）
+  manifest.records.unshift(record);
+  saveBackupManifest(manifest);
+  logger.info(`Backup record saved`, { id: record.id, items: record.items.length, workers: record.installedWorkerIds.length });
 }
 
 /**
@@ -499,6 +677,7 @@ export function registerAgentToOpenClaw(
 ): { success: boolean; message: string } {
   // 规范化 agent ID（与 OpenClaw 的 normalizeAgentId 逻辑一致：转小写，空格/下划线转连字符）
   const agentId = agentName.toLowerCase().replace(/[\s_]+/g, "-");
+  logger.debug(`Registering agent to OpenClaw`, { agentId, workspaceDir });
 
   try {
     execSync(
@@ -530,6 +709,7 @@ export function registerAgentToOpenClaw(
       stderr.includes("not recognized");
 
     if (isCommandNotFound) {
+      logger.error(`OpenClaw CLI not found`);
       return {
         success: false,
         message: "OpenClaw CLI not found. Please install OpenClaw first: https://github.com/anthropics/openclaw",
@@ -538,6 +718,7 @@ export function registerAgentToOpenClaw(
 
     const errMsg =
       cliError instanceof Error ? cliError.message : String(cliError);
+    logger.error(`openclaw agents add failed`, { agentId, stderr, error: errMsg });
     return {
       success: false,
       message: `openclaw agents add failed: ${stderr || errMsg}`,
@@ -551,6 +732,7 @@ export function registerAgentToOpenClaw(
  * @returns 重启结果
  */
 export function restartOpenClawGateway(): { success: boolean; message: string } {
+  logger.debug(`Restarting OpenClaw Gateway`);
   try {
     execSync("openclaw gateway restart", {
       stdio: "pipe",

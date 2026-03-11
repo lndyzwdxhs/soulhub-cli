@@ -103,6 +103,58 @@ export interface OpenClawAgentConfig {
   };
 }
 
+// ==========================================
+// 备份记录类型（用于回滚）
+// ==========================================
+
+/**
+ * 单个备份项：记录一个被备份的目录
+ */
+export interface BackupItem {
+  /** 原始路径（安装前的位置） */
+  originalPath: string;
+  /** 备份存放路径 */
+  backupPath: string;
+  /** 备份方式：cp（复制，原目录保留）或 mv（移动，原目录被移走） */
+  method: "cp" | "mv";
+  /** 目录角色：main=主agent workspace, worker=子agent workspace */
+  role: "main" | "worker";
+  /** agent 名称或 ID */
+  agentId: string;
+}
+
+/**
+ * 一次安装操作的完整备份记录
+ */
+export interface BackupRecord {
+  /** 唯一 ID（时间戳 + 随机数） */
+  id: string;
+  /** 安装类型 */
+  installType: "single-agent" | "team-registry" | "team-local" | "single-agent-local";
+  /** 安装的包名 */
+  packageName: string;
+  /** 安装时间（ISO 8601） */
+  createdAt: string;
+  /** OpenClaw 目录路径 */
+  clawDir: string;
+  /** 安装前的 openclaw.json 快照（用于回滚配置） */
+  openclawJsonSnapshot: string | null;
+  /** 备份的目录列表 */
+  items: BackupItem[];
+  /** 新安装的 worker agent ID 列表（回滚时需要删除这些目录） */
+  installedWorkerIds: string[];
+  /** 新安装的主 agent 名称 */
+  installedMainAgent: string | null;
+}
+
+/**
+ * 备份记录文件结构
+ */
+export interface BackupManifest {
+  /** 记录列表（按时间倒序，最新的在前） */
+  records: BackupRecord[];
+}
+
 export interface OpenClawConfig {
   [key: string]: unknown;
   agents?: {

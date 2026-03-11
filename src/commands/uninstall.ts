@@ -3,6 +3,7 @@ import chalk from "chalk";
 import ora from "ora";
 import fs from "node:fs";
 import { loadConfig, removeInstallRecord } from "../utils.js";
+import { logger } from "../logger.js";
 
 export const uninstallCommand = new Command("uninstall")
   .description("Uninstall an agent template")
@@ -37,6 +38,7 @@ export const uninstallCommand = new Command("uninstall")
       // Remove from config
       removeInstallRecord(name);
 
+      logger.info(`Agent uninstalled: ${name}`, { workspace: installed.workspace, keepFiles: !!options.keepFiles });
       spinner.succeed(
         `${chalk.cyan.bold(name)} uninstalled.`
       );
@@ -47,9 +49,11 @@ export const uninstallCommand = new Command("uninstall")
       }
       console.log();
     } catch (error) {
+      logger.errorObj("Uninstall command failed", error);
       console.error(
         chalk.red(`Error: ${error instanceof Error ? error.message : error}`)
       );
+      console.error(chalk.dim(`  See logs: ${logger.getTodayLogFile()}`));
       process.exit(1);
     }
   });

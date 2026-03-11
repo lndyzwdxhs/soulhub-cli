@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { fetchIndex, fetchAgentFile, CATEGORY_LABELS } from "../utils.js";
+import { logger } from "../logger.js";
 
 export const infoCommand = new Command("info")
   .description("View detailed information about an agent template")
@@ -89,9 +90,11 @@ export const infoCommand = new Command("info")
       );
       console.log();
     } catch (error) {
+      logger.errorObj("Info command failed", error);
       console.error(
         chalk.red(`Error: ${error instanceof Error ? error.message : error}`)
       );
+      console.error(chalk.dim(`  See logs: ${logger.getTodayLogFile()}`));
       process.exit(1);
     }
   });
