@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   release:
     # 仅在 commit message 以 "release:" 开头时触发
@@ -183,7 +186,7 @@ jobs:
             **方式一：curl 一键安装（推荐）**
 
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/lndyzwdxhs/soulhub-cli/main/scripts/install.sh | bash
+            curl -fsSL https://soulhub-1251783334.cos.ap-guangzhou.myqcloud.com/install.sh | bash
             ```
 
             **方式二：npm 安装**
