@@ -54,13 +54,14 @@ release:
 		echo "❌ 请指定版本号，用法: make release v=0.2.0"; \
 		exit 1; \
 	fi
-	@if ! git diff --quiet || ! git diff --cached --quiet; then \
-		echo "ℹ️  工作区有未提交的更改，将一并包含到 release commit 中"; \
-		git status --short; \
-	fi
 	@echo "🚀 开始发版 v$(v) ..."
-	@# 更新 package.json 版本号（不创建 git tag 和 commit）
-	npm version $(v) --no-git-tag-version
+	@# 更新 package.json 版本号（不创建 git tag 和 commit，版本相同则跳过）
+	@current_version=$$(node -p "require('./package.json').version"); \
+	if [ "$$current_version" = "$(v)" ]; then \
+		echo "ℹ️  版本号已是 $(v)，跳过更新"; \
+	else \
+		npm version $(v) --no-git-tag-version; \
+	fi
 	@# 构建并验证
 	npm run typecheck
 	npm run build
