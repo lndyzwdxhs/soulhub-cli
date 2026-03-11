@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # 仅在 commit message 以 "release:" 开头时触发
+    if: startsWith(github.event.head_commit.message, 'release:')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      # 从 commit message 中提取版本号
+      - name: Extract version from commit message
+        id: version
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          # 从 "release: v0.2.0" 中提取版本号
+          VERSION=$(echo "$COMMIT_MSG" | grep -oP 'release:\s*v?\K[0-9]+\.[0-9]+\.[0-9]+[^\s]*' || true)
+          if [ -z "$VERSION" ]; then
+            echo "❌ 无法从 commit message 中提取版本号: $COMMIT_MSG"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "✅ 提取到版本号: $VERSION"
+
+      # 验证 package.json 版本与 commit message 一致
+      - name: Verify version matches package.json
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          EXPECTED="${{ steps.version.outputs.version }}"
+          if [ "$PKG_VERSION" != "$EXPECTED" ]; then
+            echo "❌ Version mismatch: package.json=$PKG_VERSION, commit=$EXPECTED"
+            exit 1
+          fi
+          echo "✅ Version matched: $PKG_VERSION"
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+      # 验证 CLI 可以正常运行
+      - name: Verify CLI
+        run: node dist/index.js --help
+
+      # 创建 git tag
+      - name: Create git tag
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      # 发布到 npm
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 生成 changelog（基于上一个 tag 到当前 tag 的 commit）
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -n 1)
+          if [ -z "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --oneline --pretty=format:"- %s (%h)" HEAD)
+          else
+            CHANGELOG=$(git log --oneline --pretty=format:"- %s (%h)" ${PREV_TAG}..HEAD)
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # 创建 GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body: |
+            ## What's Changed
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ## Install
+
+            ```bash
+            npm install -g soulhub@${{ steps.version.outputs.version }}
+            ```
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}

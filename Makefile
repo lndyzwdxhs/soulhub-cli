@@ -1,7 +1,7 @@
 # SoulHub CLI - Makefile
 # 用于构建开发版本并打包，方便在 Linux 服务器上测试
 
-.PHONY: install build dev-build pack clean help
+.PHONY: install build dev-build pack clean help typecheck local-install local-uninstall release
 
 # 默认目标
 all: dev-build
@@ -48,6 +48,32 @@ clean:
 typecheck:
 	npm run typecheck
 
+# 发版（用法: make release v=0.2.0）
+release:
+	@if [ -z "$(v)" ]; then \
+		echo "❌ 请指定版本号，用法: make release v=0.2.0"; \
+		exit 1; \
+	fi
+	@if ! git diff --quiet || ! git diff --cached --quiet; then \
+		echo "ℹ️  工作区有未提交的更改，将一并包含到 release commit 中"; \
+		git status --short; \
+	fi
+	@echo "🚀 开始发版 v$(v) ..."
+	@# 更新 package.json 版本号（不创建 git tag 和 commit）
+	npm version $(v) --no-git-tag-version
+	@# 构建并验证
+	npm run typecheck
+	npm run build
+	@node dist/index.js --help > /dev/null 2>&1 && echo "✅ CLI 验证通过" || (echo "❌ CLI 验证失败" && exit 1)
+	@# 提交并推送（commit message 以 release: 开头会自动触发发布）
+	git add .
+	git commit -m "release: v$(v)"
+	git push origin main
+	@echo ""
+	@echo "✅ 版本 v$(v) 已发布！"
+	@echo "📦 GitHub Actions 将自动构建并发布到 npm"
+	@echo "🔗 查看进度: https://github.com/soulhub-community/soulhub-cli/actions"
+
 # 帮助信息
 help:
 	@echo "SoulHub CLI Makefile"
@@ -62,4 +88,5 @@ help:
 	@echo "  make local-uninstall- 本地卸载"
 	@echo "  make typecheck    - TypeScript 类型检查"
 	@echo "  make clean        - 清理构建产物"
+	@echo "  make release v=x.y.z - 一键发版（修改版本+提交+推送，自动触发CI发布）"
 	@echo "  make help         - 显示此帮助信息"
