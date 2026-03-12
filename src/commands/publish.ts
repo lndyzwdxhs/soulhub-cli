@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import ora from "ora";
+import { createSpinner } from "../spinner.js";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
@@ -16,7 +16,7 @@ export const publishCommand = new Command("publish")
     try {
       const dir = directory ? path.resolve(directory) : process.cwd();
 
-      const spinner = ora("Validating agent template...").start();
+      const spinner = createSpinner("Validating agent template...").start();
 
       // Check required files
       const requiredFiles = ["manifest.yaml", "IDENTITY.md", "SOUL.md"];

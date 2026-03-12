@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import ora from "ora";
+import { createSpinner } from "../spinner.js";
+import type { Spinner } from "../spinner.js";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
@@ -79,7 +80,7 @@ async function installFromRegistry(
   targetDir?: string,
   clawDir?: string
 ): Promise<void> {
-  const spinner = ora(`Checking registry for ${chalk.cyan(name)}...`).start();
+  const spinner = createSpinner(`Checking registry for ${chalk.cyan(name)}...`).start();
 
   const index = await fetchIndex();
 
@@ -115,7 +116,7 @@ async function installSingleAgent(
   targetDir?: string,
   clawDir?: string
 ): Promise<void> {
-  const spinner = ora(`Checking environment...`).start();
+  const spinner = createSpinner(`Checking environment...`).start();
 
   // 1. 检查 OpenClaw 是否安装
   if (!targetDir) {
@@ -243,7 +244,7 @@ async function installRecipeFromRegistry(
   targetDir?: string,
   clawDir?: string
 ): Promise<void> {
-  const spinner = ora(`Installing team ${chalk.cyan(recipe.displayName)}...`).start();
+  const spinner = createSpinner(`Installing team ${chalk.cyan(recipe.displayName)}...`).start();
 
   // 1. 检查 OpenClaw 是否安装
   if (!targetDir) {
@@ -381,7 +382,7 @@ async function installFromSource(
   targetDir?: string,
   clawDir?: string
 ): Promise<void> {
-  const spinner = ora("Analyzing package...").start();
+  const spinner = createSpinner("Analyzing package...").start();
 
   // 处理不同的源类型
   let packageDir: string;
@@ -467,7 +468,7 @@ async function installSingleAgentFromDir(
   targetDir?: string,
   clawDir?: string
 ): Promise<void> {
-  const spinner = ora("Installing single agent...").start();
+  const spinner = createSpinner("Installing single agent...").start();
 
   // 读取 soulhub.yaml 或推断元信息
   const pkg = readSoulHubPackage(packageDir);
@@ -565,7 +566,7 @@ async function installTeamFromDir(
   targetDir?: string,
   clawDir?: string
 ): Promise<void> {
-  const spinner = ora("Installing team...").start();
+  const spinner = createSpinner("Installing team...").start();
 
   // 1. 读取包描述
   const pkg = readSoulHubPackage(packageDir);
@@ -731,7 +732,7 @@ async function installTeamFromDir(
 async function downloadAgentFiles(
   agentName: string,
   workspaceDir: string,
-  spinner: ReturnType<typeof ora>
+  spinner: Spinner
 ): Promise<void> {
   // 确保目标目录存在
   fs.mkdirSync(workspaceDir, { recursive: true });
@@ -804,7 +805,7 @@ async function installDispatcher(
   resolvedClawDir: string,
   clawDir?: string,
   targetDir?: string,
-  spinner?: ReturnType<typeof ora>,
+  spinner?: Spinner,
   backupRecord?: BackupRecord | null
 ): Promise<void> {
   const mainWorkspace = targetDir
@@ -844,7 +845,7 @@ async function installDispatcher(
   // 从 registry 下载 dispatcher 文件
   const templateName = dispatcher.dir || dispatcher.name;
   if (spinner) spinner.text = `Downloading dispatcher files...`;
-  await downloadAgentFiles(templateName, mainWorkspace, spinner || ora());
+  await downloadAgentFiles(templateName, mainWorkspace, spinner || createSpinner());
 
   recordInstall("dispatcher", "1.0.0", mainWorkspace);
 }
@@ -904,7 +905,7 @@ function printTeamSummary(pkg: SoulHubPackage, workerIds: string[]): void {
  * 成功时显示成功提示，失败时提示用户手动重启
  */
 async function tryRestartGateway(): Promise<void> {
-  const restartSpinner = ora("Restarting OpenClaw Gateway...").start();
+  const restartSpinner = createSpinner("Restarting OpenClaw Gateway...").start();
   const result = restartOpenClawGateway();
   if (result.success) {
     restartSpinner.succeed("OpenClaw Gateway restarted successfully.");

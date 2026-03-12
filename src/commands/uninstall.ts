@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import ora from "ora";
+import { createSpinner } from "../spinner.js";
 import fs from "node:fs";
 import { loadConfig, removeInstallRecord } from "../utils.js";
 import { logger } from "../logger.js";
@@ -25,7 +25,7 @@ export const uninstallCommand = new Command("uninstall")
         process.exit(1);
       }
 
-      const spinner = ora(
+      const spinner = createSpinner(
         `Uninstalling ${chalk.cyan(name)}...`
       ).start();
 

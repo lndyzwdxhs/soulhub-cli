@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import ora from "ora";
+import { createSpinner } from "../spinner.js";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -23,7 +23,7 @@ export const updateCommand = new Command("update")
         return;
       }
 
-      const spinner = ora("Checking for updates...").start();
+      const spinner = createSpinner("Checking for updates...").start();
       const index = await fetchIndex();
 
       const toUpdate = name
