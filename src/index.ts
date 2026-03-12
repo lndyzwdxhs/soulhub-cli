@@ -4,8 +4,7 @@ import { infoCommand } from "./commands/info.js";
 import { installCommand } from "./commands/install.js";
 import { listCommand } from "./commands/list.js";
 import { updateCommand } from "./commands/update.js";
-import { uninstallCommand } from "./commands/uninstall.js";
-import { publishCommand } from "./commands/publish.js";
+import { rollbackCommand } from "./commands/rollback.js";
 import { logger } from "./logger.js";
 
 const program = new Command();
@@ -31,7 +30,6 @@ program.addCommand(infoCommand);
 program.addCommand(installCommand);
 program.addCommand(listCommand);
 program.addCommand(updateCommand);
-program.addCommand(uninstallCommand);
-program.addCommand(publishCommand);
+program.addCommand(rollbackCommand);
 
 program.parse();
