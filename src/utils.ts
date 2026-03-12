@@ -137,6 +137,14 @@ export function copyAgentFilesFromPackage(packageDir: string, targetDir: string)
       fs.copyFileSync(sourcePath, path.join(targetDir, destName));
     }
   }
+
+  // 复制 skills 目录（如果存在）
+  const skillsSource = path.join(packageDir, "skills");
+  if (fs.existsSync(skillsSource) && fs.statSync(skillsSource).isDirectory()) {
+    const skillsTarget = path.join(targetDir, "skills");
+    fs.cpSync(skillsSource, skillsTarget, { recursive: true });
+    logger.debug(`Skills directory copied`, { from: skillsSource, to: skillsTarget });
+  }
 }
 
 /**

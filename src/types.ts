@@ -8,6 +8,7 @@ export interface AgentManifest {
   author: string;
   minClawVersion: string;
   files: Record<string, number>;
+  skills: string[];
   downloads: number;
   stars: number;
 }

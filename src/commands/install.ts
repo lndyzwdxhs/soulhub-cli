@@ -731,12 +731,20 @@ async function installTeamFromDir(
  */
 function copyAgentFilesFromDir(sourceDir: string, targetDir: string): void {
   const filesToCopy = ["IDENTITY.md", "SOUL.md", "USER.md", "TOOLS.md", "AGENTS.md", "HEARTBEAT.md"];
+  fs.mkdirSync(targetDir, { recursive: true });
   for (const fileName of filesToCopy) {
     const sourcePath = path.join(sourceDir, fileName);
     if (fs.existsSync(sourcePath)) {
-      fs.mkdirSync(targetDir, { recursive: true });
       fs.copyFileSync(sourcePath, path.join(targetDir, fileName));
     }
+  }
+
+  // 复制 skills 目录（如果存在）
+  const skillsSource = path.join(sourceDir, "skills");
+  if (fs.existsSync(skillsSource) && fs.statSync(skillsSource).isDirectory()) {
+    const skillsTarget = path.join(targetDir, "skills");
+    fs.cpSync(skillsSource, skillsTarget, { recursive: true });
+    logger.debug(`Skills directory copied`, { from: skillsSource, to: skillsTarget });
   }
 }
 
