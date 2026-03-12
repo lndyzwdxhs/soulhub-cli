@@ -4,6 +4,7 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
+import readline from "node:readline";
 import yaml from "js-yaml";
 import { extract as tarExtract } from "tar";
 import type {
@@ -148,8 +149,8 @@ export function copyAgentFilesFromPackage(packageDir: string, targetDir: string)
 }
 
 /**
- * Detect OpenClaw installation directory
- * 优先级：customDir 参数 > OPENCLAW_HOME 环境变量 > 默认路径 ~/.openclaw > 当前目录 .openclaw
+ * Detect OpenClaw/LightClaw installation directory（同步版本，返回第一个找到的）
+ * 优先级：customDir 参数 > OPENCLAW_HOME/LIGHTCLAW_HOME 环境变量 > 默认路径 ~/.openclaw 或 ~/.lightclaw > 当前目录
  */
 export function findOpenClawDir(customDir?: string): string | null {
   // 1. 如果传入了自定义路径，直接使用
@@ -162,8 +163,8 @@ export function findOpenClawDir(customDir?: string): string | null {
     return resolved;
   }
 
-  // 2. 检查 OPENCLAW_HOME 环境变量
-  const envHome = process.env.OPENCLAW_HOME;
+  // 2. 检查 OPENCLAW_HOME / LIGHTCLAW_HOME 环境变量
+  const envHome = process.env.OPENCLAW_HOME || process.env.LIGHTCLAW_HOME;
   if (envHome) {
     const resolved = path.resolve(envHome);
     if (fs.existsSync(resolved)) {
@@ -173,10 +174,13 @@ export function findOpenClawDir(customDir?: string): string | null {
     return resolved;
   }
 
-  // 3. 默认路径候选列表
+  // 3. 默认路径候选列表（同时支持 openclaw 和 lightclaw）
+  const home = process.env.HOME || "~";
   const candidates = [
-    path.join(process.env.HOME || "~", ".openclaw"),
+    path.join(home, ".openclaw"),
+    path.join(home, ".lightclaw"),
     path.join(process.cwd(), ".openclaw"),
+    path.join(process.cwd(), ".lightclaw"),
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -184,6 +188,80 @@ export function findOpenClawDir(customDir?: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * 查找所有已安装的 claw 目录（用于多选场景）
+ * 当 customDir 或环境变量已指定时，只返回那一个；
+ * 否则返回所有存在的默认候选目录。
+ */
+export function findAllClawDirs(customDir?: string): string[] {
+  // 1. 自定义路径 → 唯一
+  if (customDir) {
+    const resolved = path.resolve(customDir);
+    return fs.existsSync(resolved) ? [resolved] : [resolved];
+  }
+
+  // 2. 环境变量 → 唯一
+  const envHome = process.env.OPENCLAW_HOME || process.env.LIGHTCLAW_HOME;
+  if (envHome) {
+    const resolved = path.resolve(envHome);
+    return [resolved];
+  }
+
+  // 3. 默认候选列表，返回所有存在的目录
+  const home = process.env.HOME || "~";
+  const candidates = [
+    path.join(home, ".openclaw"),
+    path.join(home, ".lightclaw"),
+    path.join(process.cwd(), ".openclaw"),
+    path.join(process.cwd(), ".lightclaw"),
+  ];
+  return candidates.filter((c) => fs.existsSync(c));
+}
+
+/**
+ * 交互式提示用户选择 claw 目录（当检测到多个时）
+ * 如果只有一个，直接返回；如果没有，返回 null。
+ */
+export async function promptSelectClawDir(customDir?: string): Promise<string | null> {
+  const dirs = findAllClawDirs(customDir);
+
+  if (dirs.length === 0) {
+    return null;
+  }
+
+  if (dirs.length === 1) {
+    return dirs[0];
+  }
+
+  // 多个候选目录，让用户选择
+  console.log();
+  console.log("  Detected multiple Claw installations:");
+  console.log();
+  dirs.forEach((dir, index) => {
+    const brand = detectClawBrand(dir);
+    console.log(`    ${index + 1}) ${brand}  ${dir}`);
+  });
+  console.log();
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise<string | null>((resolve) => {
+    rl.question(`  Please select target (1-${dirs.length}): `, (answer) => {
+      rl.close();
+      const idx = parseInt(answer.trim(), 10);
+      if (idx >= 1 && idx <= dirs.length) {
+        resolve(dirs[idx - 1]);
+      } else {
+        console.log("  Invalid selection, operation cancelled.");
+        resolve(null);
+      }
+    });
+  });
 }
 
 /**
@@ -292,14 +370,38 @@ export function checkMainAgentExists(clawDir: string): {
 }
 
 // ==========================================
-// OpenClaw 配置文件 (openclaw.json) 操作
+// OpenClaw/LightClaw 配置文件 (openclaw.json / lightclaw.json) 操作
 // ==========================================
 
 /**
- * 获取 openclaw.json 文件路径
+ * 根据 claw 目录路径自动检测品牌（openclaw 或 lightclaw）
+ */
+export function detectClawBrand(clawDir: string): "OpenClaw" | "LightClaw" {
+  // 根据目录名判断品牌
+  const dirName = path.basename(clawDir).toLowerCase();
+  if (dirName.includes("lightclaw")) {
+    return "LightClaw";
+  }
+  // 也检查是否存在 lightclaw.json 配置文件
+  if (fs.existsSync(path.join(clawDir, "lightclaw.json"))) {
+    return "LightClaw";
+  }
+  return "OpenClaw";
+}
+
+/**
+ * 获取 claw 配置文件名（openclaw.json 或 lightclaw.json）
+ */
+export function getClawConfigFileName(clawDir: string): string {
+  const brand = detectClawBrand(clawDir);
+  return brand === "LightClaw" ? "lightclaw.json" : "openclaw.json";
+}
+
+/**
+ * 获取 openclaw.json / lightclaw.json 文件路径
  */
 export function getOpenClawConfigPath(clawDir: string): string {
-  return path.join(clawDir, "openclaw.json");
+  return path.join(clawDir, getClawConfigFileName(clawDir));
 }
 
 /**
@@ -464,8 +566,8 @@ export function detectPackageKind(dir: string): "agent" | "team" | "unknown" {
 }
 
 /**
- * 检查 OpenClaw 是否已安装
- * 优先级：customDir 参数（--claw-dir）> OPENCLAW_HOME 环境变量 > 默认路径检测 > PATH 命令检测
+ * 检查 OpenClaw/LightClaw 是否已安装
+ * 优先级：customDir 参数（--claw-dir）> OPENCLAW_HOME/LIGHTCLAW_HOME 环境变量 > 默认路径检测 > PATH 命令检测
  */
 export function checkOpenClawInstalled(customDir?: string): {
   installed: boolean;
@@ -475,31 +577,32 @@ export function checkOpenClawInstalled(customDir?: string): {
   const clawDir = findOpenClawDir(customDir);
 
   if (clawDir) {
+    const brand = detectClawBrand(clawDir);
     return {
       installed: true,
       clawDir,
-      message: `OpenClaw detected at: ${clawDir}`,
+      message: `${brand} detected at: ${clawDir}`,
     };
   }
 
-  // 尝试检测 openclaw 命令是否可用
+  // 尝试检测 openclaw / lightclaw 命令是否可用
   try {
-    execSync("which openclaw 2>/dev/null || where openclaw 2>nul", {
+    execSync("which openclaw 2>/dev/null || which lightclaw 2>/dev/null || where openclaw 2>nul || where lightclaw 2>nul", {
       stdio: "pipe",
     });
     return {
       installed: true,
       clawDir: null,
-      message: "OpenClaw command found in PATH, but workspace directory not detected.",
+      message: "OpenClaw/LightClaw command found in PATH, but workspace directory not detected.",
     };
   } catch {
-    // openclaw 命令不在 PATH 中
+    // openclaw/lightclaw 命令不在 PATH 中
   }
 
   return {
     installed: false,
     clawDir: null,
-    message: "OpenClaw is not installed. Please install OpenClaw first, use --claw-dir to specify OpenClaw directory, or set OPENCLAW_HOME environment variable.",
+    message: "OpenClaw/LightClaw is not installed. Please install first, use --claw-dir to specify directory, or set OPENCLAW_HOME/LIGHTCLAW_HOME environment variable.",
   };
 }
 
@@ -601,7 +704,7 @@ export function backupAllWorkerWorkspaces(clawDir: string): { name: string; back
 }
 
 /**
- * 列出指定 OpenClaw 目录下所有已安装的 agent workspace
+ * 列出指定 OpenClaw/LightClaw 目录下所有已安装的 agent workspace
  * 返回 workspace 文件夹名称列表
  */
 export function listAgentWorkspaces(clawDir: string): string[] {
@@ -675,9 +778,9 @@ export function createBackupRecord(
   packageName: string,
   clawDir: string
 ): BackupRecord {
-  // 快照 openclaw.json
+  // 快照 openclaw.json / lightclaw.json
   let openclawJsonSnapshot: string | null = null;
-  const configPath = path.join(clawDir, "openclaw.json");
+  const configPath = getOpenClawConfigPath(clawDir);
   if (fs.existsSync(configPath)) {
     try {
       openclawJsonSnapshot = fs.readFileSync(configPath, "utf-8");
@@ -739,27 +842,29 @@ export const CATEGORY_LABELS: Record<string, string> = {
 };
 
 /**
- * 将安装的 agent 注册到 OpenClaw 配置中
- * 调用 `openclaw agents add` 命令（非交互模式），由 OpenClaw 负责生成完整的目录结构和依赖文件。
- * 必须依赖 openclaw CLI，不提供降级方案。
+ * 将安装的 agent 注册到 OpenClaw/LightClaw 配置中
+ * 调用 `openclaw/lightclaw agents add` 命令（非交互模式），由 OpenClaw/LightClaw 负责生成完整的目录结构和依赖文件。
+ * 必须依赖 openclaw/lightclaw CLI，不提供降级方案。
  */
 export function registerAgentToOpenClaw(
   agentName: string,
   workspaceDir: string,
   _clawDir?: string
 ): { success: boolean; message: string } {
-  // 规范化 agent ID（与 OpenClaw 的 normalizeAgentId 逻辑一致：转小写，空格/下划线转连字符）
+  // 规范化 agent ID（与 OpenClaw/LightClaw 的 normalizeAgentId 逻辑一致：转小写，空格/下划线转连字符）
   const agentId = agentName.toLowerCase().replace(/[\s_]+/g, "-");
-  logger.debug(`Registering agent to OpenClaw`, { agentId, workspaceDir });
+  logger.debug(`Registering agent to OpenClaw/LightClaw`, { agentId, workspaceDir });
 
   try {
+    // 优先检测 lightclaw 命令，其次 openclaw
+    const clawCmd = detectClawCommand();
     execSync(
-      `openclaw agents add "${agentId}" --workspace "${workspaceDir}" --non-interactive --json`,
+      `${clawCmd} agents add "${agentId}" --workspace "${workspaceDir}" --non-interactive --json`,
       { stdio: "pipe", timeout: 15000 }
     );
     return {
       success: true,
-      message: `Agent "${agentId}" registered via OpenClaw CLI.`,
+      message: `Agent "${agentId}" registered via CLI.`,
     };
   } catch (cliError: unknown) {
     // 检查是否是 "already exists" 错误，这种情况也视为成功
@@ -770,7 +875,7 @@ export function registerAgentToOpenClaw(
     if (stderr.includes("already exists")) {
       return {
         success: true,
-        message: `Agent "${agentId}" already registered in OpenClaw.`,
+      message: `Agent "${agentId}" already registered.`,
       };
     }
 
@@ -782,10 +887,10 @@ export function registerAgentToOpenClaw(
       stderr.includes("not recognized");
 
     if (isCommandNotFound) {
-      logger.error(`OpenClaw CLI not found`);
+      logger.error(`OpenClaw/LightClaw CLI not found`);
       return {
         success: false,
-        message: "OpenClaw CLI not found. Please install OpenClaw first: https://github.com/anthropics/openclaw",
+        message: "OpenClaw/LightClaw CLI not found. Please install first.",
       };
     }
 
@@ -800,20 +905,43 @@ export function registerAgentToOpenClaw(
 }
 
 /**
- * 重启 OpenClaw Gateway
- * 执行 `openclaw gateway restart`，如果失败则提示用户手动重启
+ * 检测可用的 claw CLI 命令（lightclaw 或 openclaw）
+ */
+export function detectClawCommand(): string {
+  // 优先检测 lightclaw
+  try {
+    execSync("which lightclaw 2>/dev/null || where lightclaw 2>nul", { stdio: "pipe" });
+    return "lightclaw";
+  } catch {
+    // lightclaw 不可用
+  }
+  // 回退到 openclaw
+  try {
+    execSync("which openclaw 2>/dev/null || where openclaw 2>nul", { stdio: "pipe" });
+    return "openclaw";
+  } catch {
+    // openclaw 也不可用
+  }
+  // 默认返回 openclaw
+  return "openclaw";
+}
+
+/**
+ * 重启 OpenClaw/LightClaw Gateway
+ * 执行 `openclaw/lightclaw gateway restart`，如果失败则提示用户手动重启
  * @returns 重启结果
  */
 export function restartOpenClawGateway(): { success: boolean; message: string } {
-  logger.debug(`Restarting OpenClaw Gateway`);
+  const clawCmd = detectClawCommand();
+  logger.debug(`Restarting ${clawCmd} Gateway`);
   try {
-    execSync("openclaw gateway restart", {
+    execSync(`${clawCmd} gateway restart`, {
       stdio: "pipe",
       timeout: 30000, // 30 秒超时
     });
     return {
       success: true,
-      message: "OpenClaw Gateway restarted successfully.",
+      message: `${clawCmd} Gateway restarted successfully.`,
     };
   } catch (error: unknown) {
     const stderr =

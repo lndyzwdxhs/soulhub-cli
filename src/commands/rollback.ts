@@ -12,6 +12,9 @@ import {
   restartOpenClawGateway,
   getMainWorkspaceDir,
   getWorkspaceDir,
+  detectClawBrand,
+  detectClawCommand,
+  promptSelectClawDir,
 } from "../utils.js";
 import type { BackupRecord } from "../types.js";
 
@@ -21,7 +24,7 @@ export const rollbackCommand = new Command("rollback")
   .option("--id <id>", "Rollback to a specific backup record by ID")
   .option(
     "--claw-dir <path>",
-    "OpenClaw installation directory (overrides OPENCLAW_HOME env var)"
+    "OpenClaw/LightClaw installation directory (overrides OPENCLAW_HOME/LIGHTCLAW_HOME env var)"
   )
   .action(async (options) => {
     try {
@@ -116,22 +119,26 @@ async function performRollback(
     `Rolling back ${chalk.cyan(record.packageName)}...`
   ).start();
 
-  const resolvedClawDir = findOpenClawDir(clawDir) || record.clawDir;
+  const resolvedClawDir = clawDir
+    ? (findOpenClawDir(clawDir) || record.clawDir)
+    : (await promptSelectClawDir() || record.clawDir);
   if (!resolvedClawDir || !fs.existsSync(resolvedClawDir)) {
-    spinner.fail(`OpenClaw directory not found: ${record.clawDir}`);
+    spinner.fail(`OpenClaw/LightClaw directory not found: ${record.clawDir}`);
     return;
   }
 
-  // 1. 恢复 openclaw.json 快照
+  const brand = detectClawBrand(resolvedClawDir);
+
+  // 1. 恢复 openclaw.json / lightclaw.json 快照
   if (record.openclawJsonSnapshot) {
-    spinner.text = "Restoring openclaw.json...";
+    spinner.text = `Restoring ${brand.toLowerCase()}.json...`;
     try {
       const configObj = JSON.parse(record.openclawJsonSnapshot);
       writeOpenClawConfig(resolvedClawDir, configObj);
-      logger.info("openclaw.json restored from snapshot", { recordId: record.id });
+      logger.info(`${brand.toLowerCase()}.json restored from snapshot`, { recordId: record.id });
     } catch (err) {
-      logger.error("Failed to restore openclaw.json", { error: err });
-      console.log(chalk.yellow("  ⚠ Failed to restore openclaw.json, skipping..."));
+      logger.error(`Failed to restore ${brand.toLowerCase()}.json`, { error: err });
+      console.log(chalk.yellow(`  ⚠ Failed to restore ${brand.toLowerCase()}.json, skipping...`));
     }
   }
 
@@ -216,16 +223,18 @@ async function performRollback(
     `Rolled back ${chalk.cyan.bold(record.packageName)} successfully! (${restoredCount} item(s) restored)`
   );
 
-  // 6. 重启 OpenClaw Gateway
-  const restartSpinner = createSpinner("Restarting OpenClaw Gateway...").start();
+  // 6. 重启 OpenClaw/LightClaw Gateway
+  const clawCmd = detectClawCommand();
+  const brandName = clawCmd === "lightclaw" ? "LightClaw" : "OpenClaw";
+  const restartSpinner = createSpinner(`Restarting ${brandName} Gateway...`).start();
   const result = restartOpenClawGateway();
   if (result.success) {
-    restartSpinner.succeed("OpenClaw Gateway restarted successfully.");
+    restartSpinner.succeed(`${brandName} Gateway restarted successfully.`);
   } else {
-    restartSpinner.warn("Failed to restart OpenClaw Gateway.");
+    restartSpinner.warn(`Failed to restart ${brandName} Gateway.`);
     console.log(chalk.yellow(`  Reason: ${result.message}`));
     console.log(chalk.dim("  Please restart manually:"));
-    console.log(chalk.dim("    openclaw gateway restart"));
+    console.log(chalk.dim(`    ${clawCmd} gateway restart`));
   }
 
   console.log();

@@ -16,7 +16,6 @@ import {
   getMainWorkspaceDir,
   checkMainAgentExists,
   recordInstall,
-  checkOpenClawInstalled,
   backupAgentWorkspace,
   backupAllWorkerWorkspaces,
   registerAgentToOpenClaw,
@@ -28,8 +27,25 @@ import {
   createBackupRecord,
   addBackupItem,
   commitBackupRecord,
+  detectClawBrand,
+  detectClawCommand,
+  promptSelectClawDir,
 } from "../utils.js";
 import type { SoulHubPackage, BackupRecord } from "../types.js";
+
+/**
+ * 解析 claw 目录：如果用户指定了 --claw-dir，直接使用；
+ * 否则检测所有候选目录，多个时交互选择，单个时直接使用。
+ * @returns 解析后的 clawDir，如果用户取消选择则返回 null
+ */
+async function resolveClawDir(clawDir?: string): Promise<string | null> {
+  // 如果用户通过 --claw-dir 指定了，直接使用（不触发选择）
+  if (clawDir) {
+    return findOpenClawDir(clawDir);
+  }
+  // 自动检测，可能需要交互选择
+  return promptSelectClawDir();
+}
 
 export const installCommand = new Command("install")
   .description("Install an agent or team from the SoulHub registry")
@@ -37,11 +53,11 @@ export const installCommand = new Command("install")
   .option("--from <source>", "Install from a local directory, ZIP file, or URL")
   .option(
     "--dir <path>",
-    "Target directory (defaults to OpenClaw workspace)"
+    "Target directory (defaults to OpenClaw/LightClaw workspace)"
   )
   .option(
     "--claw-dir <path>",
-    "OpenClaw installation directory (overrides OPENCLAW_HOME env var, defaults to ~/.openclaw)"
+    "OpenClaw/LightClaw installation directory (overrides OPENCLAW_HOME/LIGHTCLAW_HOME env var, defaults to ~/.openclaw or ~/.lightclaw)"
   )
   .action(async (name: string | undefined, options) => {
     try {
@@ -119,17 +135,20 @@ async function installSingleAgent(
 ): Promise<void> {
   const spinner = createSpinner(`Checking environment...`).start();
 
-  // 1. 检查 OpenClaw 是否安装
+  // 0. 解析 claw 目录（可能触发交互选择）
+  let selectedClawDir: string | null = null;
   if (!targetDir) {
-    const clawCheck = checkOpenClawInstalled(clawDir);
-    if (!clawCheck.installed) {
-      spinner.fail("OpenClaw is not installed.");
+    spinner.stop();
+    selectedClawDir = await resolveClawDir(clawDir);
+    if (!selectedClawDir) {
+      console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
       printOpenClawInstallHelp();
       return;
     }
-    spinner.text = chalk.dim(`OpenClaw detected: ${clawCheck.clawDir || "via PATH"}`);
+    spinner.start();
+    const brand = detectClawBrand(selectedClawDir);
+    spinner.text = chalk.dim(`${brand} detected: ${selectedClawDir}`);
   }
-
   // 2. 查询 registry 获取 agent 信息
   spinner.text = `Fetching agent ${chalk.cyan(name)}...`;
   const index = await fetchIndex();
@@ -145,24 +164,17 @@ async function installSingleAgent(
   if (targetDir) {
     workspaceDir = path.resolve(targetDir);
   } else {
-    const resolvedClawDir = findOpenClawDir(clawDir);
-    if (!resolvedClawDir) {
-      spinner.fail("OpenClaw workspace directory not found.");
-      printOpenClawInstallHelp();
-      return;
-    }
     // 单 agent 安装到主 workspace
-    workspaceDir = getMainWorkspaceDir(resolvedClawDir);
+    workspaceDir = getMainWorkspaceDir(selectedClawDir!);
   }
 
   // 4. 检查主 agent 是否已存在，备份
-  const resolvedClawDirForBackup = findOpenClawDir(clawDir)!;
   const backupRecord = !targetDir
-    ? createBackupRecord("single-agent", name, resolvedClawDirForBackup)
+    ? createBackupRecord("single-agent", name, selectedClawDir!)
     : null;
 
   if (!targetDir) {
-    const mainCheck = checkMainAgentExists(resolvedClawDirForBackup);
+    const mainCheck = checkMainAgentExists(selectedClawDir!);
     if (mainCheck.hasContent) {
       spinner.warn(
         `Existing main agent detected. Backing up workspace...`
@@ -187,17 +199,16 @@ async function installSingleAgent(
     }
   }
 
-  // 5. 确保 workspace 目录存在 + 更新 openclaw.json
+  // 5. 确保 workspace 目录存在 + 更新 openclaw.json / lightclaw.json
   //    备份是 cp（原目录不动），所以如果目录已存在无需重建
-  //    不使用 openclaw agents add（那是给子 agent 用的，"main" 是保留 id）
+  //    不使用 openclaw/lightclaw agents add（那是给子 agent 用的，"main" 是保留 id）
   if (!fs.existsSync(workspaceDir)) {
     fs.mkdirSync(workspaceDir, { recursive: true });
   }
   if (!targetDir) {
     spinner.text = `Registering ${chalk.cyan(agent.displayName)} as main agent...`;
-    const resolvedClawDir = findOpenClawDir(clawDir)!;
-    addAgentToOpenClawConfig(resolvedClawDir, "main", name, true);
-    spinner.text = chalk.dim(`Main agent registered in openclaw.json`);
+    addAgentToOpenClawConfig(selectedClawDir!, "main", name, true);
+    spinner.text = chalk.dim(`Main agent registered in config`);
   }
 
   // 6. 下载 agent tar.gz 包并解压到 workspace
@@ -246,21 +257,20 @@ async function installRecipeFromRegistry(
 ): Promise<void> {
   const spinner = createSpinner(`Installing team ${chalk.cyan(recipe.displayName)}...`).start();
 
-  // 1. 检查 OpenClaw 是否安装
-  if (!targetDir) {
-    const clawCheck = checkOpenClawInstalled(clawDir);
-    if (!clawCheck.installed) {
-      spinner.fail("OpenClaw is not installed.");
+  // 1. 解析 claw 目录（可能触发交互选择）
+  let resolvedClawDir: string;
+  if (targetDir) {
+    resolvedClawDir = path.resolve(targetDir);
+  } else {
+    spinner.stop();
+    const selected = await resolveClawDir(clawDir);
+    if (!selected) {
+      console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
       printOpenClawInstallHelp();
       return;
     }
-  }
-
-  const resolvedClawDir = targetDir ? path.resolve(targetDir) : findOpenClawDir(clawDir);
-  if (!resolvedClawDir) {
-    spinner.fail("OpenClaw workspace directory not found.");
-    printOpenClawInstallHelp();
-    return;
+    resolvedClawDir = selected;
+    spinner.start();
   }
 
   // 2. 从 COS 下载 recipe yaml 描述文件
@@ -472,14 +482,17 @@ async function installSingleAgentFromDir(
   const pkg = readSoulHubPackage(packageDir);
   const agentName = pkg?.name || path.basename(packageDir);
 
-  // 1. 检查 OpenClaw
+  // 1. 解析 claw 目录（可能触发交互选择）
+  let selectedClawDir: string | null = null;
   if (!targetDir) {
-    const clawCheck = checkOpenClawInstalled(clawDir);
-    if (!clawCheck.installed) {
-      spinner.fail("OpenClaw is not installed.");
+    spinner.stop();
+    selectedClawDir = await resolveClawDir(clawDir);
+    if (!selectedClawDir) {
+      console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
       printOpenClawInstallHelp();
       return;
     }
+    spinner.start();
   }
 
   // 2. 确定目标目录（主 workspace）
@@ -487,22 +500,16 @@ async function installSingleAgentFromDir(
   if (targetDir) {
     workspaceDir = path.resolve(targetDir);
   } else {
-    const resolvedClawDir = findOpenClawDir(clawDir);
-    if (!resolvedClawDir) {
-      spinner.fail("OpenClaw workspace directory not found.");
-      return;
-    }
-    workspaceDir = getMainWorkspaceDir(resolvedClawDir);
+    workspaceDir = getMainWorkspaceDir(selectedClawDir!);
   }
 
   // 3. 备份
   const localBackupRecord = !targetDir
-    ? createBackupRecord("single-agent-local", agentName, findOpenClawDir(clawDir)!)
+    ? createBackupRecord("single-agent-local", agentName, selectedClawDir!)
     : null;
 
   if (!targetDir) {
-    const resolvedClawDir = findOpenClawDir(clawDir)!;
-    const mainCheck = checkMainAgentExists(resolvedClawDir);
+    const mainCheck = checkMainAgentExists(selectedClawDir!);
     if (mainCheck.hasContent) {
       spinner.warn("Existing main agent detected. Backing up...");
       const backupDir = backupAgentWorkspace(workspaceDir);
@@ -519,15 +526,14 @@ async function installSingleAgentFromDir(
     }
   }
 
-  // 4. 确保 workspace 目录存在 + 注册主 agent 到 openclaw.json
+  // 4. 确保 workspace 目录存在 + 注册主 agent 到 openclaw.json / lightclaw.json
   //    备份是 cp（原目录不动），所以如果目录已存在无需重建
   if (!fs.existsSync(workspaceDir)) {
     fs.mkdirSync(workspaceDir, { recursive: true });
   }
   if (!targetDir) {
     spinner.text = `Registering ${chalk.cyan(agentName)} as main agent...`;
-    const resolvedClawDir = findOpenClawDir(clawDir)!;
-    addAgentToOpenClawConfig(resolvedClawDir, "main", agentName, true);
+    addAgentToOpenClawConfig(selectedClawDir!, "main", agentName, true);
   }
 
   // 5. 复制 IDENTITY.md 和 SOUL.md
@@ -573,20 +579,20 @@ async function installTeamFromDir(
     return;
   }
 
-  // 2. 检查 OpenClaw
-  if (!targetDir) {
-    const clawCheck = checkOpenClawInstalled(clawDir);
-    if (!clawCheck.installed) {
-      spinner.fail("OpenClaw is not installed.");
+  // 2. 解析 claw 目录（可能触发交互选择）
+  let resolvedClawDir: string;
+  if (targetDir) {
+    resolvedClawDir = path.resolve(targetDir);
+  } else {
+    spinner.stop();
+    const selected = await resolveClawDir(clawDir);
+    if (!selected) {
+      console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
       printOpenClawInstallHelp();
       return;
     }
-  }
-
-  const resolvedClawDir = targetDir ? path.resolve(targetDir) : findOpenClawDir(clawDir);
-  if (!resolvedClawDir) {
-    spinner.fail("OpenClaw workspace directory not found.");
-    return;
+    resolvedClawDir = selected;
+    spinner.start();
   }
 
   // 2.5 备份存量子 agent（mv 方式）
@@ -643,7 +649,7 @@ async function installTeamFromDir(
       }
     }
 
-    // 确保 workspace 目录存在 + 更新 openclaw.json
+    // 确保 workspace 目录存在 + 更新 openclaw.json / lightclaw.json
     //    备份是 cp（原目录不动），所以如果目录已存在无需重建
     if (!fs.existsSync(mainWorkspace)) {
       fs.mkdirSync(mainWorkspace, { recursive: true });
@@ -784,7 +790,7 @@ async function installDispatcher(
     }
   }
 
-  // 确保 workspace 目录存在 + 更新 openclaw.json
+  // 确保 workspace 目录存在 + 更新 openclaw.json / lightclaw.json
   //    备份是 cp（原目录不动），所以如果目录已存在无需重建
   if (!fs.existsSync(mainWorkspace)) {
     fs.mkdirSync(mainWorkspace, { recursive: true });
@@ -827,11 +833,11 @@ async function extractZipToDir(
  * 打印 OpenClaw 安装帮助信息
  */
 function printOpenClawInstallHelp(): void {
-  console.log(chalk.dim("  Please install OpenClaw first, or use one of the following options:"));
-  console.log(chalk.dim("  --claw-dir <path>    Specify OpenClaw installation directory"));
-  console.log(chalk.dim("  --dir <path>         Specify agent target directory directly"));
-  console.log(chalk.dim("  OPENCLAW_HOME=<path> Set environment variable"));
-  console.log(chalk.dim("  Visit: https://github.com/anthropics/openclaw for installation instructions."));
+  console.log(chalk.dim("  Please install OpenClaw or LightClaw first, or use one of the following options:"));
+  console.log(chalk.dim("  --claw-dir <path>            Specify OpenClaw/LightClaw installation directory"));
+  console.log(chalk.dim("  --dir <path>                 Specify agent target directory directly"));
+  console.log(chalk.dim("  OPENCLAW_HOME=<path>         Set environment variable (for OpenClaw)"));
+  console.log(chalk.dim("  LIGHTCLAW_HOME=<path>        Set environment variable (for LightClaw)"));
 }
 
 /**
@@ -858,15 +864,17 @@ function printTeamSummary(pkg: SoulHubPackage, workerIds: string[]): void {
  * 成功时显示成功提示，失败时提示用户手动重启
  */
 async function tryRestartGateway(): Promise<void> {
-  const restartSpinner = createSpinner("Restarting OpenClaw Gateway...").start();
+  const clawCmd = detectClawCommand();
+  const brandName = clawCmd === "lightclaw" ? "LightClaw" : "OpenClaw";
+  const restartSpinner = createSpinner(`Restarting ${brandName} Gateway...`).start();
   const result = restartOpenClawGateway();
   if (result.success) {
-    restartSpinner.succeed("OpenClaw Gateway restarted successfully.");
+    restartSpinner.succeed(`${brandName} Gateway restarted successfully.`);
   } else {
-    restartSpinner.warn("Failed to restart OpenClaw Gateway.");
+    restartSpinner.warn(`Failed to restart ${brandName} Gateway.`);
     console.log(chalk.yellow(`  Reason: ${result.message}`));
     console.log(chalk.dim("  Please restart manually:"));
-    console.log(chalk.dim("    openclaw gateway restart"));
+    console.log(chalk.dim(`    ${clawCmd} gateway restart`));
   }
 }
 
