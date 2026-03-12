@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import { fetchIndex, fetchAgentFile, CATEGORY_LABELS } from "../utils.js";
+import { fetchIndex, downloadAgentPackage, CATEGORY_LABELS } from "../utils.js";
 import { logger } from "../logger.js";
 
 export const infoCommand = new Command("info")
@@ -58,30 +58,50 @@ export const infoCommand = new Command("info")
       }
 
       // Show file contents if requested
-      if (options.identity) {
-        console.log();
-        console.log(chalk.bold("  ── IDENTITY.md ──"));
-        console.log();
-        const content = await fetchAgentFile(name, "IDENTITY.md");
-        console.log(
-          content
-            .split("\n")
-            .map((l) => `  ${l}`)
-            .join("\n")
-        );
-      }
+      if (options.identity || options.soul) {
+        // 下载 agent 包到临时目录，然后读取文件内容
+        const fs = await import("node:fs");
+        const pkgDir = await downloadAgentPackage(name, agent.version);
+        try {
+          if (options.identity) {
+            console.log();
+            console.log(chalk.bold("  ── IDENTITY.md ──"));
+            console.log();
+            const identityPath = (await import("node:path")).default.join(pkgDir, "IDENTITY.md");
+            if (fs.default.existsSync(identityPath)) {
+              const content = fs.default.readFileSync(identityPath, "utf-8");
+              console.log(
+                content
+                  .split("\n")
+                  .map((l: string) => `  ${l}`)
+                  .join("\n")
+              );
+            } else {
+              console.log(chalk.dim("  (IDENTITY.md not found in package)"));
+            }
+          }
 
-      if (options.soul) {
-        console.log();
-        console.log(chalk.bold("  ── SOUL.md ──"));
-        console.log();
-        const content = await fetchAgentFile(name, "SOUL.md");
-        console.log(
-          content
-            .split("\n")
-            .map((l) => `  ${l}`)
-            .join("\n")
-        );
+          if (options.soul) {
+            console.log();
+            console.log(chalk.bold("  ── SOUL.md ──"));
+            console.log();
+            const soulPath = (await import("node:path")).default.join(pkgDir, "SOUL.md");
+            if (fs.default.existsSync(soulPath)) {
+              const content = fs.default.readFileSync(soulPath, "utf-8");
+              console.log(
+                content
+                  .split("\n")
+                  .map((l: string) => `  ${l}`)
+                  .join("\n")
+              );
+            } else {
+              console.log(chalk.dim("  (SOUL.md not found in package)"));
+            }
+          }
+        } finally {
+          // 清理临时目录
+          fs.default.rmSync(pkgDir, { recursive: true, force: true });
+        }
       }
 
       console.log();

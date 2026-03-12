@@ -2,12 +2,12 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { createSpinner } from "../spinner.js";
 import fs from "node:fs";
-import path from "node:path";
 import {
   loadConfig,
   saveConfig,
   fetchIndex,
-  fetchAgentFile,
+  downloadAgentPackage,
+  copyAgentFilesFromPackage,
 } from "../utils.js";
 import { logger } from "../logger.js";
 
@@ -52,26 +52,15 @@ export const updateCommand = new Command("update")
 
         spinner.text = `Updating ${chalk.cyan(installed.name)} (${installed.version} → ${remote.version})...`;
 
-        // Re-download files
+        // 下载新版 agent tar.gz 包并解压覆盖
         const workspaceDir = installed.workspace;
         if (!fs.existsSync(workspaceDir)) {
           fs.mkdirSync(workspaceDir, { recursive: true });
         }
 
-        for (const fileName of ["IDENTITY.md", "SOUL.md", "manifest.yaml"]) {
-          try {
-            const content = await fetchAgentFile(
-              installed.name,
-              fileName
-            );
-            fs.writeFileSync(
-              path.join(workspaceDir, fileName),
-              content
-            );
-          } catch {
-            // Skip optional files
-          }
-        }
+        const pkgDir = await downloadAgentPackage(installed.name, remote.version);
+        copyAgentFilesFromPackage(pkgDir, workspaceDir);
+        fs.rmSync(pkgDir, { recursive: true, force: true });
 
         // Update version in config
         installed.version = remote.version;

@@ -8,8 +8,9 @@ import yaml from "js-yaml";
 import { logger } from "../logger.js";
 import {
   fetchIndex,
-  fetchAgentFile,
-  fetchRecipeFile,
+  downloadAgentPackage,
+  fetchRecipeYaml,
+  copyAgentFilesFromPackage,
   findOpenClawDir,
   getWorkspaceDir,
   getMainWorkspaceDir,
@@ -199,12 +200,11 @@ async function installSingleAgent(
     spinner.text = chalk.dim(`Main agent registered in openclaw.json`);
   }
 
-  // 6. 下载 IDENTITY.md 和 SOUL.md 覆盖默认模板
-  spinner.text = `Downloading ${chalk.cyan(agent.displayName)} soul files...`;
-  await downloadAgentFiles(name, workspaceDir, spinner);
-
-  // 7. 保存 manifest
-  await saveAgentManifest(name, agent, workspaceDir);
+  // 6. 下载 agent tar.gz 包并解压到 workspace
+  spinner.text = `Downloading ${chalk.cyan(agent.displayName)} package...`;
+  const pkgDir = await downloadAgentPackage(name, agent.version);
+  copyAgentFilesFromPackage(pkgDir, workspaceDir);
+  fs.rmSync(pkgDir, { recursive: true, force: true }); // 清理临时目录
 
   // 8. 记录安装
   recordInstall(name, agent.version, workspaceDir);
@@ -263,14 +263,14 @@ async function installRecipeFromRegistry(
     return;
   }
 
-  // 2. 下载并解析 soulhub.yaml
+  // 2. 从 COS 下载 recipe yaml 描述文件
   spinner.text = `Fetching team configuration...`;
   let pkg: SoulHubPackage;
   try {
-    const soulhubYamlContent = await fetchRecipeFile(name, "soulhub.yaml");
+    const soulhubYamlContent = await fetchRecipeYaml(name, recipe.version || "latest");
     pkg = yaml.load(soulhubYamlContent) as SoulHubPackage;
   } catch {
-    spinner.fail(`Failed to fetch soulhub.yaml for recipe "${name}". Recipe packages must include a soulhub.yaml file.`);
+    spinner.fail(`Failed to fetch recipe yaml for "${name}". Recipe must have a published yaml file.`);
     return;
   }
 
@@ -331,14 +331,12 @@ async function installRecipeFromRegistry(
       fs.mkdirSync(workerDir, { recursive: true });
     }
 
-    // 从 registry 下载 agent 文件（用 template/dir 名称去下载）
-    await downloadAgentFiles(agentName, workerDir, spinner);
-
-    // 保存 manifest
+    // 从 COS 下载 agent tar.gz 包并解压
     const agentInfo = index.agents.find((a) => a.name === agentName);
-    if (agentInfo) {
-      await saveAgentManifest(agentName, agentInfo, workerDir);
-    }
+    const agentVersion = agentInfo?.version || "latest";
+    const pkgDir = await downloadAgentPackage(agentName, agentVersion);
+    copyAgentFilesFromPackage(pkgDir, workerDir);
+    fs.rmSync(pkgDir, { recursive: true, force: true });
 
     recordInstall(agentId, recipe.version || "1.0.0", workerDir);
     workerIds.push(agentId);
@@ -726,62 +724,7 @@ async function installTeamFromDir(
 // 辅助函数
 // ==========================================
 
-/**
- * 从 registry 下载 agent 的 IDENTITY.md、SOUL.md 等文件
- */
-async function downloadAgentFiles(
-  agentName: string,
-  workspaceDir: string,
-  spinner: Spinner
-): Promise<void> {
-  // 确保目标目录存在
-  fs.mkdirSync(workspaceDir, { recursive: true });
 
-  // 核心文件（IDENTITY.md 和 SOUL.md），下载失败时抛出错误
-  const coreFiles = ["IDENTITY.md", "SOUL.md"];
-  for (const fileName of coreFiles) {
-    const content = await fetchAgentFile(agentName, fileName);
-    fs.writeFileSync(path.join(workspaceDir, fileName), content);
-    spinner.text = `Downloaded ${fileName}`;
-  }
-
-  // 可选的模板文件，下载失败时静默跳过
-  const optionalFiles = ["USER.md.template", "TOOLS.md.template"];
-  for (const fileName of optionalFiles) {
-    try {
-      const content = await fetchAgentFile(agentName, fileName);
-      const actualName = fileName.replace(".template", "");
-      fs.writeFileSync(path.join(workspaceDir, actualName), content);
-    } catch {
-      // 静默跳过
-    }
-  }
-}
-
-/**
- * 保存 agent manifest 文件
- */
-async function saveAgentManifest(
-  agentName: string,
-  agent: { name: string; displayName: string; description: string; category: string; tags: string[]; version: string; author: string },
-  workspaceDir: string
-): Promise<void> {
-  try {
-    const manifestContent = await fetchAgentFile(agentName, "manifest.yaml");
-    fs.writeFileSync(path.join(workspaceDir, "manifest.yaml"), manifestContent);
-  } catch {
-    const manifest = {
-      name: agent.name,
-      displayName: agent.displayName,
-      description: agent.description,
-      category: agent.category,
-      tags: agent.tags,
-      version: agent.version,
-      author: agent.author,
-    };
-    fs.writeFileSync(path.join(workspaceDir, "manifest.yaml"), yaml.dump(manifest));
-  }
-}
 
 /**
  * 从本地目录复制 agent 文件（IDENTITY.md, SOUL.md 等）
@@ -842,10 +785,12 @@ async function installDispatcher(
     addAgentToOpenClawConfig(resolvedClawDir, "main", dispatcher.name, true);
   }
 
-  // 从 registry 下载 dispatcher 文件
+  // 从 COS 下载 dispatcher tar.gz 包并解压
   const templateName = dispatcher.dir || dispatcher.name;
-  if (spinner) spinner.text = `Downloading dispatcher files...`;
-  await downloadAgentFiles(templateName, mainWorkspace, spinner || createSpinner());
+  if (spinner) spinner.text = `Downloading dispatcher package...`;
+  const pkgDir = await downloadAgentPackage(templateName);
+  copyAgentFilesFromPackage(pkgDir, mainWorkspace);
+  fs.rmSync(pkgDir, { recursive: true, force: true });
 
   recordInstall("dispatcher", "1.0.0", mainWorkspace);
 }

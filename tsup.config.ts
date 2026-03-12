@@ -1,4 +1,5 @@
 import { defineConfig } from "tsup";
+import pkg from "./package.json";
 
 export default defineConfig({
   entry: ["src/index.ts"],
@@ -10,6 +11,10 @@ export default defineConfig({
   // 排除 Node.js 内置模块
   platform: "node",
   target: "node20",
+  // 构建时注入版本号，自动与 package.json 同步
+  define: {
+    __VERSION__: JSON.stringify(pkg.version),
+  },
   // 生成 banner 添加 shebang
   banner: {
     js: "#!/usr/bin/env node",

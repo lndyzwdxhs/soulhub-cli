@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { execSync } from "node:child_process";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
 import yaml from "js-yaml";
+import { extract as tarExtract } from "tar";
 import type {
   AgentIndex,
   SoulHubConfig,
@@ -14,9 +18,9 @@ import type {
 } from "./types.js";
 import { logger } from "./logger.js";
 
-// Registry base URL
+// Registry base URL（COS 直连）
 const DEFAULT_REGISTRY_URL =
-  "http://soulhub.store";
+  "https://soulhub-1251783334.cos.accelerate.myqcloud.com/registry";
 
 export function getRegistryUrl(): string {
   return process.env.SOULHUB_REGISTRY_URL || DEFAULT_REGISTRY_URL;
@@ -37,41 +41,102 @@ export async function fetchIndex(): Promise<AgentIndex> {
 }
 
 /**
- * Fetch a file from the registry for a specific agent
+ * 下载 agent 包（.tar.gz）并解压到临时目录
+ * @returns 解压后的临时目录路径
  */
-export async function fetchAgentFile(
+export async function downloadAgentPackage(
   agentName: string,
-  fileName: string
+  version: string = "latest"
 ): Promise<string> {
-  const url = `${getRegistryUrl()}/agents/${agentName}/${fileName}`;
-  logger.debug(`Fetching agent file`, { agentName, fileName, url });
+  const url = `${getRegistryUrl()}/agents/${agentName}/${version}.tar.gz`;
+  logger.debug(`Downloading agent package`, { agentName, version, url });
+
+  const tmpDir = path.join(os.tmpdir(), ".soulhub", `pkg-${Date.now()}-${agentName}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
   const response = await fetch(url);
   if (!response.ok) {
-    logger.error(`Failed to fetch agent file`, { agentName, fileName, url, status: response.status });
+    // 清理临时目录
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    logger.error(`Failed to download agent package`, { agentName, version, url, status: response.status });
     throw new Error(
-      `Failed to fetch ${fileName} for ${agentName}: ${response.statusText}`
+      `Failed to download ${agentName}@${version}: ${response.statusText}`
+    );
+  }
+
+  // 将响应流通过 gunzip → tar extract 管道解压到临时目录
+  const body = response.body;
+  if (!body) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    throw new Error(`Empty response body for ${agentName}@${version}`);
+  }
+
+  try {
+    // 先将内容写入临时文件，再用 tar 解压（兼容性更好）
+    const tmpTarPath = path.join(tmpDir, "_package.tar.gz");
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(tmpTarPath, buffer);
+
+    await tarExtract({
+      file: tmpTarPath,
+      cwd: tmpDir,
+    });
+
+    // 清理临时 tar 文件
+    fs.unlinkSync(tmpTarPath);
+  } catch (err) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    throw new Error(
+      `Failed to extract ${agentName}@${version}: ${err instanceof Error ? err.message : err}`
+    );
+  }
+
+  logger.debug(`Agent package extracted`, { agentName, version, tmpDir });
+  return tmpDir;
+}
+
+/**
+ * 下载 Team 描述文件（.yaml）
+ * @returns YAML 文件内容字符串
+ */
+export async function fetchRecipeYaml(
+  recipeName: string,
+  version: string = "latest"
+): Promise<string> {
+  const url = `${getRegistryUrl()}/recipes/${recipeName}/${version}.yaml`;
+  logger.debug(`Fetching recipe yaml`, { recipeName, version, url });
+  const response = await fetch(url);
+  if (!response.ok) {
+    logger.error(`Failed to fetch recipe yaml`, { recipeName, version, url, status: response.status });
+    throw new Error(
+      `Failed to fetch recipe ${recipeName}@${version}: ${response.statusText}`
     );
   }
   return await response.text();
 }
 
 /**
- * Fetch a recipe file from the registry
+ * 从解压后的 agent 包目录复制文件到目标 workspace
+ * 支持的文件列表：IDENTITY.md, SOUL.md, USER.md, TOOLS.md, AGENTS.md, HEARTBEAT.md, manifest.yaml
  */
-export async function fetchRecipeFile(
-  recipeName: string,
-  fileName: string
-): Promise<string> {
-  const url = `${getRegistryUrl()}/recipes/${recipeName}/${fileName}`;
-  logger.debug(`Fetching recipe file`, { recipeName, fileName, url });
-  const response = await fetch(url);
-  if (!response.ok) {
-    logger.error(`Failed to fetch recipe file`, { recipeName, fileName, url, status: response.status });
-    throw new Error(
-      `Failed to fetch ${fileName} for recipe ${recipeName}: ${response.statusText}`
-    );
+export function copyAgentFilesFromPackage(packageDir: string, targetDir: string): void {
+  const filesToCopy = [
+    "IDENTITY.md", "SOUL.md", "USER.md", "TOOLS.md",
+    "AGENTS.md", "HEARTBEAT.md", "manifest.yaml",
+    "USER.md.template", "TOOLS.md.template",
+  ];
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  for (const fileName of filesToCopy) {
+    const sourcePath = path.join(packageDir, fileName);
+    if (fs.existsSync(sourcePath)) {
+      // .template 文件去掉后缀
+      const destName = fileName.endsWith(".template")
+        ? fileName.replace(".template", "")
+        : fileName;
+      fs.copyFileSync(sourcePath, path.join(targetDir, destName));
+    }
   }
-  return await response.text();
 }
 
 /**
