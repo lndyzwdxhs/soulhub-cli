@@ -12,7 +12,7 @@ import {
 import { logger } from "../logger.js";
 
 export const updateCommand = new Command("update")
-  .description("Update installed agent templates to latest versions")
+  .description("Update installed agents to latest versions")
   .argument("[name]", "Agent name to update (updates all if omitted)")
   .action(async (name?: string) => {
     try {

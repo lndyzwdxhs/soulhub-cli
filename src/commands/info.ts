@@ -4,7 +4,7 @@ import { fetchIndex, downloadAgentPackage, CATEGORY_LABELS } from "../utils.js";
 import { logger } from "../logger.js";
 
 export const infoCommand = new Command("info")
-  .description("View detailed information about an agent template")
+  .description("Show details of an agent (identity, soul, skills, etc.)")
   .argument("<name>", "Agent name")
   .option("--identity", "Show IDENTITY.md content")
   .option("--soul", "Show SOUL.md content")

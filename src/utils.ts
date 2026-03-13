@@ -209,7 +209,7 @@ export function findAllClawDirs(customDir?: string): string[] {
     return [resolved];
   }
 
-  // 3. 默认候选列表，返回所有存在的目录
+  // 3. 默认候选列表，返回所有存在的目录（去重）
   const home = process.env.HOME || "~";
   const candidates = [
     path.join(home, ".openclaw"),
@@ -217,7 +217,15 @@ export function findAllClawDirs(customDir?: string): string[] {
     path.join(process.cwd(), ".openclaw"),
     path.join(process.cwd(), ".lightclaw"),
   ];
-  return candidates.filter((c) => fs.existsSync(c));
+  const existing = candidates.filter((c) => fs.existsSync(c));
+  // 使用 realpath 去重，避免同一目录以不同路径形式重复出现
+  const seen = new Set<string>();
+  return existing.filter((c) => {
+    const real = fs.realpathSync(c);
+    if (seen.has(real)) return false;
+    seen.add(real);
+    return true;
+  });
 }
 
 /**

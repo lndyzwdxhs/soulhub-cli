@@ -4,7 +4,7 @@ import { loadConfig, CATEGORY_LABELS } from "../utils.js";
 import { logger } from "../logger.js";
 
 export const listCommand = new Command("list")
-  .description("List installed agent templates")
+  .description("List installed agents")
   .alias("ls")
   .action(async () => {
     try {

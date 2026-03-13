@@ -4,7 +4,7 @@ import { fetchIndex, CATEGORY_LABELS } from "../utils.js";
 import { logger } from "../logger.js";
 
 export const searchCommand = new Command("search")
-  .description("Search for agent templates in the SoulHub registry")
+  .description("Search for agents in the SoulHub registry")
   .argument("[query]", "Search query (matches name, description, tags)")
   .option("-c, --category <category>", "Filter by category")
   .option("-l, --limit <number>", "Max results to show", "20")

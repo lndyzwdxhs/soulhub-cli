@@ -13,7 +13,7 @@ const program = new Command();
 
 program
   .name("soulhub")
-  .description("SoulHub CLI - Install and manage AI agent persona templates")
+  .description("SoulHub CLI - Discover, install and manage AI agent souls")
   .version(__VERSION__)
   .option("--verbose", "Enable verbose debug logging")
   .hook("preAction", () => {
