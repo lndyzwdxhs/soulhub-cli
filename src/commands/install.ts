@@ -189,7 +189,7 @@ async function installSingleAgent(
   const pkgDir = await downloadAgentPackage(name, agent.version);
   spinner.succeed(`Package ${chalk.cyan(agent.displayName)} downloaded.`);
 
-  // 逐个 claw 目录安装
+  // 逐个 claw 目录安装（每个 claw 单独重启）
   for (const selectedClawDir of allClawDirs) {
     await installSingleAgentToClaw(name, selectedClawDir, undefined, asMain, pkgDir, agent);
   }
@@ -212,7 +212,7 @@ async function installSingleAgentToClaw(
   targetDir?: string,
   asMain: boolean = false,
   preDownloadedPkgDir?: string,
-  preLoadedAgent?: { name: string; displayName: string; version: string }
+  preLoadedAgent?: { name: string; displayName: string; version: string },
 ): Promise<void> {
   const brand = selectedClawDir ? detectClawBrand(selectedClawDir) : null;
   const clawLabel = brand ? `${brand} (${selectedClawDir})` : targetDir!;
@@ -297,7 +297,7 @@ async function installSingleAgentToClaw(
       addAgentToOpenClawConfig(selectedClawDir!, "main", name, true);
     } else {
       spinner.text = `Registering ${chalk.cyan(agent.displayName)} as worker agent...`;
-      const regResult = registerAgentToOpenClaw(agentId, workspaceDir);
+      const regResult = registerAgentToOpenClaw(agentId, workspaceDir, selectedClawDir || undefined);
       if (!regResult.success) {
         spinner.fail(`Failed to register ${agentId}: ${regResult.message}`);
         return;
@@ -349,7 +349,7 @@ async function installSingleAgentToClaw(
 
 // ==========================================
 // 多 Agent Team 安装（从 Registry Recipe）
-// ==========================================
+// ==========// ==========================================
 
 /**
  * 从 registry recipe 安装多 Agent 团队
@@ -603,7 +603,7 @@ async function installSingleAgentFromDir(
     return;
   }
 
-  // 逐个 claw 目录安装
+  // 逐个 claw 目录安装（每个 claw 单独重启）
   for (const selectedClawDir of allClawDirs) {
     await installSingleAgentFromDirToClaw(packageDir, agentName, pkg, selectedClawDir, undefined, asMain);
   }
@@ -618,7 +618,7 @@ async function installSingleAgentFromDirToClaw(
   pkg: SoulHubPackage | null,
   selectedClawDir: string | null,
   targetDir?: string,
-  asMain: boolean = false
+  asMain: boolean = false,
 ): Promise<void> {
   const brand = selectedClawDir ? detectClawBrand(selectedClawDir) : null;
   const clawLabel = brand ? `${brand} (${selectedClawDir})` : targetDir!;
@@ -684,7 +684,7 @@ async function installSingleAgentFromDirToClaw(
       addAgentToOpenClawConfig(selectedClawDir!, "main", agentName, true);
     } else {
       spinner.text = `Registering ${chalk.cyan(agentName)} as worker agent...`;
-      const regResult = registerAgentToOpenClaw(agentId, workspaceDir);
+      const regResult = registerAgentToOpenClaw(agentId, workspaceDir, selectedClawDir || undefined);
       if (!regResult.success) {
         spinner.fail(`Failed to register ${agentId}: ${regResult.message}`);
         return;
@@ -1035,10 +1035,7 @@ async function tryRestartGateway(): Promise<void> {
   if (result.success) {
     restartSpinner.succeed(`${brandName} Gateway restarted successfully.`);
   } else {
-    restartSpinner.warn(`Failed to restart ${brandName} Gateway.`);
-    console.log(chalk.yellow(`  Reason: ${result.message}`));
-    console.log(chalk.dim("  Please restart manually:"));
-    console.log(chalk.dim(`    ${clawCmd} gateway restart`));
+    restartSpinner.warn(`Failed to restart ${brandName} Gateway. Please restart it manually.`);
   }
 }
 
