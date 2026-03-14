@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import { logger } from "../logger.js";
-import readline from "node:readline";
+
 import {
   fetchIndex,
   downloadAgentPackage,
@@ -50,44 +50,26 @@ async function resolveClawDir(clawDir?: string): Promise<string | null> {
 }
 
 /**
- * 交互式询问用户安装角色（主 agent 还是子 agent）
- * @returns true = 安装为主 agent，false = 安装为子 agent，null = 用户取消
+ * 解析所有 claw 目录（非交互式，全部返回）：
+ * 如果用户指定了 --claw-dir，返回该单个目录；
+ * 否则返回所有检测到的 claw 目录。
+ * @returns claw 目录列表
  */
-async function promptInstallRole(agentName: string): Promise<boolean | null> {
-  console.log();
-  console.log(`  How would you like to install ${chalk.cyan(agentName)}?`);
-  console.log();
-  console.log(`    1) ${chalk.blue("Main Agent")}    Install as main agent (workspace/)`);
-  console.log(`    2) ${chalk.green("Worker Agent")}  Install as worker agent (workspace-${agentName}/)`);
-  console.log();
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise<boolean | null>((resolve) => {
-    rl.question("  Please select (1-2, default: 2): ", (answer) => {
-      rl.close();
-      const trimmed = answer.trim();
-      if (trimmed === "" || trimmed === "2") {
-        resolve(false); // 默认：子 agent
-      } else if (trimmed === "1") {
-        resolve(true); // 主 agent
-      } else {
-        console.log("  Invalid selection, operation cancelled.");
-        resolve(null);
-      }
-    });
-  });
+function resolveAllClawDirs(clawDir?: string): string[] {
+  if (clawDir) {
+    const resolved = findOpenClawDir(clawDir);
+    return resolved ? [resolved] : [];
+  }
+  return findAllClawDirs();
 }
 
+
+
 export const installCommand = new Command("install")
-  .description("Install an agent or team from the SoulHub registry (default: as worker)")
+  .description("Install an agent or team from the SoulHub registry (default: as worker, installs to all detected claws)")
   .argument("[name]", "Agent or team name to install")
   .option("--from <source>", "Install from a local directory, ZIP file, or URL")
-  .option("--main", "Install as main agent (non-interactive)")
-  .option("--worker", "Install as worker/sub-agent (non-interactive)")
+  .option("--main", "Install as main agent")
   .option(
     "--dir <path>",
     "Target directory (defaults to OpenClaw/LightClaw workspace)"
@@ -98,14 +80,8 @@ export const installCommand = new Command("install")
   )
   .action(async (name: string | undefined, options) => {
     try {
-      // 解析安装角色：--main 和 --worker 互斥，都没指定时为 undefined（后续交互式选择）
-      let asMain: boolean | undefined;
-      if (options.main && options.worker) {
-        console.error(chalk.red("Error: --main and --worker cannot be used together."));
-        process.exit(1);
-      }
-      if (options.main) asMain = true;
-      if (options.worker) asMain = false;
+      // 默认安装为子 agent（worker），--main 指定安装为主 agent
+      const asMain: boolean = !!options.main;
 
       if (options.from) {
         // 从本地目录/ZIP/URL 安装，自动识别单/多 agent
@@ -116,12 +92,11 @@ export const installCommand = new Command("install")
       } else {
         console.error(chalk.red("Please specify an agent or team name, or use --from to install from a local source."));
         console.log(chalk.dim("  Examples:"));
-        console.log(chalk.dim("    soulhub install writer-wechat            # 交互式选择安装为主/子 agent"));
-        console.log(chalk.dim("    soulhub install writer-wechat --main     # 非交互式，安装为主 agent (workspace/)"));
-        console.log(chalk.dim("    soulhub install writer-wechat --worker   # 非交互式，安装为子 agent (workspace-xxx/)"));
-        console.log(chalk.dim("    soulhub install dev-squad                # 从 registry 安装团队"));
-        console.log(chalk.dim("    soulhub install --from ./agent-team/     # 从本地目录安装"));
-        console.log(chalk.dim("    soulhub install writer-wechat --claw-dir ~/.lightclaw  # 非交互式指定 claw 目录"));
+        console.log(chalk.dim("    soulhub install writer-wechat            # Install as worker to all detected claws"));
+        console.log(chalk.dim("    soulhub install writer-wechat --main     # Install as main agent"));
+        console.log(chalk.dim("    soulhub install dev-squad                # Install a team from registry"));
+        console.log(chalk.dim("    soulhub install --from ./agent-team/     # Install from local directory"));
+        console.log(chalk.dim("    soulhub install writer-wechat --claw-dir ~/.lightclaw  # Install to specific claw"));
         process.exit(1);
       }
     } catch (error) {
@@ -158,7 +133,7 @@ async function installFromRegistry(
 
   if (agent && !recipe) {
     spinner.stop();
-    logger.info(`Installing single agent from registry: ${name}, asMain=${asMain ?? 'interactive'}`);
+    logger.info(`Installing single agent from registry: ${name}, asMain=${asMain}`);
     await installSingleAgent(name, targetDir, clawDir, asMain);
   } else if (recipe) {
     spinner.stop();
@@ -176,45 +151,33 @@ async function installFromRegistry(
 // ==========================================
 
 /**
- * 安装单个 agent
- * @param asMain 是否安装为主 agent。undefined 时交互式询问用户
+ * 安装单个 agent（分发函数）
+ * 默认安装为子 agent，安装到所有检测到的 claw 目录。
+ * 如果指定了 --claw-dir，只安装到该目录；如果指定了 --dir，直接安装到该目录。
+ * @param asMain true = 安装为主 agent，false = 安装为子 agent
  */
 async function installSingleAgent(
   name: string,
   targetDir?: string,
   clawDir?: string,
-  asMain?: boolean
+  asMain: boolean = false
 ): Promise<void> {
-  const spinner = createSpinner(`Checking environment...`).start();
-
-  // 0. 解析 claw 目录（--claw-dir 指定时非交互式，否则可能交互选择）
-  let selectedClawDir: string | null = null;
-  if (!targetDir) {
-    spinner.stop();
-    selectedClawDir = await resolveClawDir(clawDir);
-    if (!selectedClawDir) {
-      console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
-      printOpenClawInstallHelp();
-      return;
-    }
-    const brand = detectClawBrand(selectedClawDir);
-    console.log(chalk.dim(`  ${brand} detected: ${selectedClawDir}`));
+  // 如果指定了 --dir，直接安装到该目录（单一安装）
+  if (targetDir) {
+    await installSingleAgentToClaw(name, null, targetDir, asMain);
+    return;
   }
 
-  // 0.5 确定安装角色：如果未通过参数指定，交互式询问
-  const agentId = name.toLowerCase().replace(/[\s_]+/g, "-");
-  if (asMain === undefined) {
-    const choice = await promptInstallRole(agentId);
-    if (choice === null) return; // 用户取消
-    asMain = choice;
+  // 获取所有 claw 目录
+  const allClawDirs = resolveAllClawDirs(clawDir);
+  if (allClawDirs.length === 0) {
+    console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
+    printOpenClawInstallHelp();
+    return;
   }
-  logger.info(`Install role resolved: asMain=${asMain}`);
 
-  if (!targetDir) {
-    spinner.start();
-  }
-  // 2. 查询 registry 获取 agent 信息
-  spinner.text = `Fetching agent ${chalk.cyan(name)}...`;
+  // 先下载 agent 包（只下载一次，多个 claw 复用）
+  const spinner = createSpinner(`Fetching agent ${chalk.cyan(name)}...`).start();
   const index = await fetchIndex();
   const agent = index.agents.find((a) => a.name === name);
   if (!agent) {
@@ -222,32 +185,75 @@ async function installSingleAgent(
     console.log(chalk.dim("  Use 'soulhub search' to find available agents."));
     return;
   }
+  spinner.text = `Downloading ${chalk.cyan(agent.displayName)} package...`;
+  const pkgDir = await downloadAgentPackage(name, agent.version);
+  spinner.succeed(`Package ${chalk.cyan(agent.displayName)} downloaded.`);
 
-  // 3. 确定目标目录和安装角色
+  // 逐个 claw 目录安装
+  for (const selectedClawDir of allClawDirs) {
+    await installSingleAgentToClaw(name, selectedClawDir, undefined, asMain, pkgDir, agent);
+  }
+
+  // 清理临时包目录
+  fs.rmSync(pkgDir, { recursive: true, force: true });
+}
+
+/**
+ * 将单个 agent 安装到一个具体的 claw 目录
+ * @param selectedClawDir claw 目录（当 targetDir 存在时可为 null）
+ * @param targetDir 自定义目标目录
+ * @param asMain 是否安装为主 agent
+ * @param preDownloadedPkgDir 预下载的包目录（可选，避免重复下载）
+ * @param preLoadedAgent 预加载的 agent 信息（可选）
+ */
+async function installSingleAgentToClaw(
+  name: string,
+  selectedClawDir: string | null,
+  targetDir?: string,
+  asMain: boolean = false,
+  preDownloadedPkgDir?: string,
+  preLoadedAgent?: { name: string; displayName: string; version: string }
+): Promise<void> {
+  const brand = selectedClawDir ? detectClawBrand(selectedClawDir) : null;
+  const clawLabel = brand ? `${brand} (${selectedClawDir})` : targetDir!;
+  const spinner = createSpinner(`Installing to ${chalk.dim(clawLabel)}...`).start();
+
+  const agentId = name.toLowerCase().replace(/[\s_]+/g, "-");
+  logger.info(`Install role resolved: asMain=${asMain}, claw=${selectedClawDir || targetDir}`);
+
+  // 1. 获取 agent 信息（如果未预加载）
+  let agent = preLoadedAgent;
+  if (!agent) {
+    spinner.text = `Fetching agent ${chalk.cyan(name)}...`;
+    const index = await fetchIndex();
+    const found = index.agents.find((a) => a.name === name);
+    if (!found) {
+      spinner.fail(`Agent "${name}" not found in registry.`);
+      console.log(chalk.dim("  Use 'soulhub search' to find available agents."));
+      return;
+    }
+    agent = found;
+  }
+
+  // 2. 确定目标目录
   let workspaceDir: string;
-
   if (targetDir) {
     workspaceDir = path.resolve(targetDir);
   } else if (asMain) {
-    // --main：安装到主 workspace
     workspaceDir = getMainWorkspaceDir(selectedClawDir!);
   } else {
-    // 默认：安装为子 agent（workspace-xxx）
     workspaceDir = getWorkspaceDir(selectedClawDir!, agentId);
   }
 
-  // 4. 备份已有内容
+  // 3. 备份已有内容
   const backupRecord = !targetDir
     ? createBackupRecord("single-agent", name, selectedClawDir!)
     : null;
 
   if (!targetDir && asMain) {
-    // 主 agent 模式：检查主 workspace 是否已有内容
     const mainCheck = checkMainAgentExists(selectedClawDir!);
     if (mainCheck.hasContent) {
-      spinner.warn(
-        `Existing main agent detected. Backing up workspace...`
-      );
+      spinner.warn(`Existing main agent detected. Backing up workspace...`);
       const backupDir = backupAgentWorkspace(workspaceDir);
       if (backupDir) {
         console.log(chalk.yellow(`  ⚠ Existing main agent backed up to: ${backupDir}`));
@@ -261,7 +267,6 @@ async function installSingleAgent(
       }
     }
   } else if (!targetDir && !asMain) {
-    // 子 agent 模式：备份已有的同名子 agent 目录
     if (fs.existsSync(workspaceDir)) {
       const backupDir = backupAgentWorkspace(workspaceDir);
       if (backupDir) {
@@ -276,14 +281,13 @@ async function installSingleAgent(
       }
     }
   } else if (targetDir) {
-    // 自定义目录也做备份
     const backupDir = backupAgentWorkspace(workspaceDir);
     if (backupDir) {
       console.log(chalk.yellow(`  ⚠ Existing agent backed up to: ${backupDir}`));
     }
   }
 
-  // 5. 确保 workspace 目录存在 + 注册到 openclaw.json / lightclaw.json
+  // 4. 确保 workspace 目录存在 + 注册到 openclaw.json / lightclaw.json
   if (!fs.existsSync(workspaceDir)) {
     fs.mkdirSync(workspaceDir, { recursive: true });
   }
@@ -291,28 +295,29 @@ async function installSingleAgent(
     if (asMain) {
       spinner.text = `Registering ${chalk.cyan(agent.displayName)} as main agent...`;
       addAgentToOpenClawConfig(selectedClawDir!, "main", name, true);
-      spinner.text = chalk.dim(`Main agent registered in config`);
     } else {
       spinner.text = `Registering ${chalk.cyan(agent.displayName)} as worker agent...`;
-      const regResult = registerAgentToOpenClaw(agentId, workspaceDir, clawDir);
+      const regResult = registerAgentToOpenClaw(agentId, workspaceDir);
       if (!regResult.success) {
         spinner.fail(`Failed to register ${agentId}: ${regResult.message}`);
         return;
       }
-      spinner.text = chalk.dim(`Worker agent ${agentId} registered in config`);
     }
   }
 
-  // 6. 下载 agent tar.gz 包并解压到 workspace
-  spinner.text = `Downloading ${chalk.cyan(agent.displayName)} package...`;
-  const pkgDir = await downloadAgentPackage(name, agent.version);
-  copyAgentFilesFromPackage(pkgDir, workspaceDir);
-  fs.rmSync(pkgDir, { recursive: true, force: true }); // 清理临时目录
+  // 5. 复制 agent 文件到 workspace
+  if (preDownloadedPkgDir) {
+    copyAgentFilesFromPackage(preDownloadedPkgDir, workspaceDir);
+  } else {
+    spinner.text = `Downloading ${chalk.cyan(agent.displayName)} package...`;
+    const pkgDir = await downloadAgentPackage(name, agent.version);
+    copyAgentFilesFromPackage(pkgDir, workspaceDir);
+    fs.rmSync(pkgDir, { recursive: true, force: true });
+  }
 
-  // 8. 记录安装
+  // 6. 记录安装
   recordInstall(name, agent.version, workspaceDir);
 
-  // 记录备份信息
   if (backupRecord) {
     if (asMain) {
       backupRecord.installedMainAgent = name;
@@ -329,9 +334,8 @@ async function installSingleAgent(
 
   logger.info(`Single agent installed as ${roleLabel}: ${name}`, { version: agent.version, workspace: workspaceDir });
   spinner.succeed(
-    `${chalk.cyan.bold(agent.displayName)} installed as ${roleLabel}!`
+    `${chalk.cyan.bold(agent.displayName)} installed as ${roleLabel} → ${chalk.dim(clawLabel)}`
   );
-  console.log();
   console.log(`  ${chalk.dim("Location:")} ${workspaceDir}`);
   console.log(`  ${chalk.dim("Version:")}  ${agent.version}`);
   console.log(`  ${chalk.dim("Type:")}     ${typeLabel}`);
@@ -571,51 +575,60 @@ async function installFromSource(
 }
 
 /**
- * 从本地目录安装单个 agent
- * @param asMain 是否安装为主 agent。undefined 时交互式询问用户
+ * 从本地目录安装单个 agent（分发函数）
+ * 默认安装为子 agent，安装到所有检测到的 claw 目录。
+ * @param asMain 是否安装为主 agent，默认 false
  */
 async function installSingleAgentFromDir(
   packageDir: string,
   targetDir?: string,
   clawDir?: string,
-  asMain?: boolean
+  asMain: boolean = false
 ): Promise<void> {
-  const spinner = createSpinner("Installing single agent...").start();
-
   // 读取 soulhub.yaml 或推断元信息
   const pkg = readSoulHubPackage(packageDir);
   const agentName = pkg?.name || path.basename(packageDir);
 
-  // 1. 解析 claw 目录（--claw-dir 指定时非交互式，否则可能交互选择）
-  let selectedClawDir: string | null = null;
-  if (!targetDir) {
-    spinner.stop();
-    selectedClawDir = await resolveClawDir(clawDir);
-    if (!selectedClawDir) {
-      console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
-      printOpenClawInstallHelp();
-      return;
-    }
-    const brand = detectClawBrand(selectedClawDir);
-    console.log(chalk.dim(`  ${brand} detected: ${selectedClawDir}`));
+  // 如果指定了 --dir，直接安装到该目录（单一安装）
+  if (targetDir) {
+    await installSingleAgentFromDirToClaw(packageDir, agentName, pkg, null, targetDir, asMain);
+    return;
   }
 
-  // 1.5 确定安装角色：如果未通过参数指定，交互式询问
+  // 获取所有 claw 目录
+  const allClawDirs = resolveAllClawDirs(clawDir);
+  if (allClawDirs.length === 0) {
+    console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
+    printOpenClawInstallHelp();
+    return;
+  }
+
+  // 逐个 claw 目录安装
+  for (const selectedClawDir of allClawDirs) {
+    await installSingleAgentFromDirToClaw(packageDir, agentName, pkg, selectedClawDir, undefined, asMain);
+  }
+}
+
+/**
+ * 将单个本地 agent 安装到一个具体的 claw 目录
+ */
+async function installSingleAgentFromDirToClaw(
+  packageDir: string,
+  agentName: string,
+  pkg: SoulHubPackage | null,
+  selectedClawDir: string | null,
+  targetDir?: string,
+  asMain: boolean = false
+): Promise<void> {
+  const brand = selectedClawDir ? detectClawBrand(selectedClawDir) : null;
+  const clawLabel = brand ? `${brand} (${selectedClawDir})` : targetDir!;
+  const spinner = createSpinner(`Installing to ${chalk.dim(clawLabel)}...`).start();
+
   const agentId = agentName.toLowerCase().replace(/[\s_]+/g, "-");
-  if (asMain === undefined) {
-    const choice = await promptInstallRole(agentId);
-    if (choice === null) return; // 用户取消
-    asMain = choice;
-  }
-  logger.info(`Install role resolved: asMain=${asMain}`);
+  logger.info(`Install role resolved: asMain=${asMain}, claw=${selectedClawDir || targetDir}`);
 
-  if (!targetDir) {
-    spinner.start();
-  }
-
-  // 2. 确定目标目录和安装角色
+  // 1. 确定目标目录
   let workspaceDir: string;
-
   if (targetDir) {
     workspaceDir = path.resolve(targetDir);
   } else if (asMain) {
@@ -624,7 +637,7 @@ async function installSingleAgentFromDir(
     workspaceDir = getWorkspaceDir(selectedClawDir!, agentId);
   }
 
-  // 3. 备份
+  // 2. 备份
   const localBackupRecord = !targetDir
     ? createBackupRecord("single-agent-local", agentName, selectedClawDir!)
     : null;
@@ -661,7 +674,7 @@ async function installSingleAgentFromDir(
     }
   }
 
-  // 4. 确保 workspace 目录存在 + 注册 agent
+  // 3. 确保 workspace 目录存在 + 注册 agent
   if (!fs.existsSync(workspaceDir)) {
     fs.mkdirSync(workspaceDir, { recursive: true });
   }
@@ -671,7 +684,7 @@ async function installSingleAgentFromDir(
       addAgentToOpenClawConfig(selectedClawDir!, "main", agentName, true);
     } else {
       spinner.text = `Registering ${chalk.cyan(agentName)} as worker agent...`;
-      const regResult = registerAgentToOpenClaw(agentId, workspaceDir, clawDir);
+      const regResult = registerAgentToOpenClaw(agentId, workspaceDir);
       if (!regResult.success) {
         spinner.fail(`Failed to register ${agentId}: ${regResult.message}`);
         return;
@@ -679,7 +692,7 @@ async function installSingleAgentFromDir(
     }
   }
 
-  // 5. 复制 IDENTITY.md 和 SOUL.md
+  // 4. 复制 agent 文件
   spinner.text = `Copying soul files...`;
   copyAgentFilesFromDir(packageDir, workspaceDir);
 
@@ -701,8 +714,7 @@ async function installSingleAgentFromDir(
     : chalk.green("Single Agent (Worker)");
 
   logger.info(`Single agent installed from dir as ${roleLabel}: ${agentName}`, { source: packageDir, workspace: workspaceDir });
-  spinner.succeed(`${chalk.cyan.bold(agentName)} installed as ${roleLabel}!`);
-  console.log();
+  spinner.succeed(`${chalk.cyan.bold(agentName)} installed as ${roleLabel} → ${chalk.dim(clawLabel)}`);
   console.log(`  ${chalk.dim("Location:")} ${workspaceDir}`);
   console.log(`  ${chalk.dim("Source:")}   ${packageDir}`);
   console.log(`  ${chalk.dim("Type:")}     ${typeLabel}`);

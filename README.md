@@ -1,6 +1,6 @@
 # SoulHub CLI
 
-SoulHub CLI — 用于安装和管理 OpenClaw AI Agent 人格模板的命令行工具。支持从 SoulHub Registry 或本地目录安装单 Agent 和多 Agent 团队。
+SoulHub CLI — 用于发现、安装和管理 AI Agent 灵魂（Soul）的命令行工具。支持从 SoulHub Registry 或本地目录安装单 Agent 和多 Agent 团队，兼容 OpenClaw 和 LightClaw。
 
 ## 安装
 
@@ -34,14 +34,14 @@ npx soulhubcli <command>
 
 | 命令 | 说明 |
 |------|------|
-| `soulhub search <keyword>` | 按关键词搜索 Agent 模板 |
-| `soulhub info <name>` | 查看 Agent 详细信息 |
-| `soulhub install <name>` | 从 Registry 安装 Agent 或团队 |
+| `soulhub search <keyword>` | 搜索 Agent |
+| `soulhub info <name>` | 查看 Agent 详细信息（identity、soul、skills 等） |
+| `soulhub install <name>` | 从 Registry 安装 Agent 或团队（默认为 worker，安装到所有检测到的 claw） |
+| `soulhub install <name> --main` | 安装为主 Agent |
 | `soulhub install --from <source>` | 从本地目录、ZIP 文件或 URL 安装 |
 | `soulhub list` | 列出已安装的 Agent |
 | `soulhub update [name]` | 更新已安装的 Agent |
-| `soulhub uninstall <name>` | 卸载已安装的 Agent |
-| `soulhub publish` | 验证并发布你的 Agent |
+| `soulhub rollback` | 回滚到上一次安装状态 |
 
 ## 使用方法
 
@@ -56,11 +56,16 @@ soulhub search "content writing"
 
 CLI 会自动识别目标是单 Agent 还是多 Agent 团队，无需手动区分。
 
+**默认行为：安装为 Worker Agent，自动安装到所有检测到的 claw 目录。**
+
 **从 Registry 安装：**
 
 ```bash
-# 安装单 Agent（作为主 Agent，部署到 workspace 目录）
-soulhub install ops-assistant
+# 安装单 Agent（默认为 worker，安装到所有检测到的 claw）
+soulhub install writer-wechat
+
+# 安装为主 Agent
+soulhub install writer-wechat --main
 
 # 安装多 Agent 团队（调度 Agent + 工作 Agent）
 soulhub install dev-squad
@@ -82,11 +87,11 @@ soulhub install --from https://example.com/agent-team.zip
 **指定目标目录：**
 
 ```bash
-# 安装到自定义目录（不依赖 OpenClaw 环境）
-soulhub install ops-assistant --dir ./my-agents
+# 安装到自定义目录（不依赖 OpenClaw/LightClaw 环境）
+soulhub install writer-wechat --dir ./my-agents
 
-# 指定 OpenClaw 安装目录
-soulhub install ops-assistant --claw-dir /opt/openclaw
+# 指定 claw 安装目录（只安装到该 claw）
+soulhub install writer-wechat --claw-dir ~/.lightclaw
 ```
 
 ### 列出已安装的 Agent
@@ -112,9 +117,11 @@ soulhub uninstall ops-assistant
 
 ### 单 Agent 安装
 
-- 单 Agent 会作为**主 Agent** 安装到 OpenClaw 的 `workspace/` 目录
-- 如果已存在主 Agent，CLI 会**自动备份**（复制到 `agentbackup/workspace`），原目录保持不变
-- 仅覆盖 `IDENTITY.md` 和 `SOUL.md` 等灵魂文件，不影响 workspace 中的其他运行时文件
+- **默认安装为 Worker Agent**（子 agent），部署到 `workspace-<agentId>/` 目录
+- 使用 `--main` 参数可安装为主 Agent，部署到 `workspace/` 目录
+- **自动安装到所有检测到的 claw 目录**（OpenClaw / LightClaw），使用 `--claw-dir` 可指定单个 claw
+- 如果目标目录已存在，CLI 会**自动备份**（复制到 `agentbackup/`）
+- 仅覆盖 `IDENTITY.md`、`SOUL.md` 等灵魂文件，不影响 workspace 中的其他运行时文件
 - 安装完成后自动重启 OpenClaw Gateway；若重启失败会提示手动重启
 
 ### 多 Agent 团队安装
@@ -122,7 +129,7 @@ soulhub uninstall ops-assistant
 - **调度 Agent（Dispatcher）** 作为主 Agent 安装到 `workspace/` 目录
 - **工作 Agent（Worker）** 安装到各自的 `workspace-<agentId>/` 目录
 - 自动配置多 Agent 之间的通信
-- Worker Agent 通过 `openclaw agents add` 命令注册
+- Worker Agent 自动注册到 claw 配置中
 - 安装完成后自动重启 OpenClaw Gateway
 
 ## 配置
@@ -137,18 +144,20 @@ CLI 将配置存储在 `~/.soulhub/config.json`。
 export SOULHUB_REGISTRY_URL=https://your-registry.example.com
 ```
 
-### OpenClaw 目录
+### OpenClaw / LightClaw 目录
 
-CLI 按以下优先级查找 OpenClaw 安装目录：
+CLI 按以下优先级查找 claw 安装目录：
 
-1. `--claw-dir` 命令行参数
-2. `OPENCLAW_HOME` 环境变量
-3. 默认路径 `~/.openclaw`
+1. `--claw-dir` 命令行参数（指定时只安装到该 claw）
+2. `OPENCLAW_HOME` / `LIGHTCLAW_HOME` 环境变量
+3. 默认路径 `~/.openclaw`、`~/.lightclaw`
+
+未指定 `--claw-dir` 时，CLI 会检测所有可用的 claw 目录并全部安装。
 
 ## 环境要求
 
 - Node.js >= 18.0.0
-- OpenClaw（可选，使用 `--dir` 参数时不需要）
+- OpenClaw 或 LightClaw（可选，使用 `--dir` 参数时不需要）
 
 ## License
 
