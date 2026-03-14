@@ -509,8 +509,12 @@ export function addAgentToOpenClawConfig(
     // 检查是否已存在
     const existing = config.agents.list.find((a) => a.id === agentId);
     if (existing) {
-      // 更新名称
+      // 更新所有字段（用户预期是更新 agent 内容）
       existing.name = agentName;
+      if (!isMain) {
+        existing.workspace = path.join(clawDir, `workspace-${agentId}`);
+        existing.agentDir = path.join(clawDir, `agents/${agentId}/agent`);
+      }
       return config;
     }
 
@@ -881,34 +885,51 @@ export function registerAgentToOpenClaw(
         ? String((cliError as { stderr: unknown }).stderr)
         : "";
     if (stderr.includes("already exists")) {
+      // agent 已注册，但仍需更新配置（用户预期是更新 agent 内容）
+      logger.info(`Agent "${agentId}" already exists in CLI, updating config...`);
+      try {
+        const clawDir = _clawDir || path.dirname(workspaceDir);
+        addAgentToOpenClawConfig(clawDir, agentId, agentName, false);
+      } catch {
+        // 更新配置失败不影响整体流程
+        logger.warn(`Failed to update config for existing agent "${agentId}", skipping.`);
+      }
       return {
         success: true,
-      message: `Agent "${agentId}" already registered.`,
+        message: `Agent "${agentId}" already registered, config updated.`,
       };
     }
 
-    // 判断具体失败原因，给出明确的错误提示
-    const isCommandNotFound =
-      (cliError && typeof cliError === "object" && "code" in cliError &&
-        (cliError as { code: unknown }).code === "ENOENT") ||
-      stderr.includes("not found") ||
-      stderr.includes("not recognized");
-
-    if (isCommandNotFound) {
-      logger.error(`OpenClaw/LightClaw CLI not found`);
-      return {
-        success: false,
-        message: "OpenClaw/LightClaw CLI not found. Please install first.",
-      };
-    }
-
+    // CLI 命令失败，fallback 到直接修改配置文件
     const errMsg =
       cliError instanceof Error ? cliError.message : String(cliError);
-    logger.error(`openclaw agents add failed`, { agentId, stderr, error: errMsg });
-    return {
-      success: false,
-      message: `openclaw agents add failed: ${stderr || errMsg}`,
-    };
+    logger.warn(`CLI agents add failed, falling back to config file modification`, { agentId, stderr, error: errMsg });
+
+    try {
+      // 从 workspaceDir 推导 clawDir（workspaceDir 格式为 <clawDir>/workspace-<agentId>）
+      const clawDir = _clawDir || path.dirname(workspaceDir);
+      const configUpdated = addAgentToOpenClawConfig(clawDir, agentId, agentName, false);
+      if (configUpdated) {
+        logger.info(`Agent "${agentId}" registered via config file fallback.`);
+        return {
+          success: true,
+          message: `Agent "${agentId}" registered via config file (CLI fallback).`,
+        };
+      } else {
+        logger.error(`Failed to update config file for agent "${agentId}"`);
+        return {
+          success: false,
+          message: `Failed to register "${agentId}": CLI command failed and config file update also failed.`,
+        };
+      }
+    } catch (configError: unknown) {
+      const configErrMsg = configError instanceof Error ? configError.message : String(configError);
+      logger.error(`Config file fallback also failed`, { agentId, error: configErrMsg });
+      return {
+        success: false,
+        message: `Failed to register "${agentId}": CLI failed (${stderr || errMsg}), config fallback also failed (${configErrMsg}).`,
+      };
+    }
   }
 }
 
