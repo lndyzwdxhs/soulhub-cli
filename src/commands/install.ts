@@ -190,7 +190,13 @@ async function installSingleAgent(
   spinner.succeed(`Package ${chalk.cyan(agent.displayName)} downloaded.`);
 
   // 逐个 claw 目录安装（每个 claw 单独重启）
+  const showClawHeader = allClawDirs.length > 1;
   for (const selectedClawDir of allClawDirs) {
+    if (showClawHeader) {
+      const brand = detectClawBrand(selectedClawDir);
+      console.log();
+      console.log(chalk.bold(`── ${brand} (${selectedClawDir}) ──`));
+    }
     await installSingleAgentToClaw(name, selectedClawDir, undefined, asMain, pkgDir, agent);
   }
 
@@ -604,7 +610,13 @@ async function installSingleAgentFromDir(
   }
 
   // 逐个 claw 目录安装（每个 claw 单独重启）
+  const showClawHeader = allClawDirs.length > 1;
   for (const selectedClawDir of allClawDirs) {
+    if (showClawHeader) {
+      const brand = detectClawBrand(selectedClawDir);
+      console.log();
+      console.log(chalk.bold(`── ${brand} (${selectedClawDir}) ──`));
+    }
     await installSingleAgentFromDirToClaw(packageDir, agentName, pkg, selectedClawDir, undefined, asMain);
   }
 }
