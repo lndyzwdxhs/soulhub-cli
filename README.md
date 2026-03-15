@@ -90,8 +90,8 @@ soulhub install --from https://example.com/agent-team.zip
 # 安装到自定义目录（不依赖 OpenClaw/LightClaw 环境）
 soulhub install writer-wechat --dir ./my-agents
 
-# 指定 claw 安装目录（只安装到该 claw）
-soulhub install writer-wechat --claw-dir ~/.lightclaw
+# 指定 claw 类型（只安装到该 claw）
+soulhub install writer-wechat --clawtype LightClaw
 ```
 
 ### 列出已安装的 Agent
@@ -119,7 +119,7 @@ soulhub uninstall ops-assistant
 
 - **默认安装为 Worker Agent**（子 agent），部署到 `workspace-<agentId>/` 目录
 - 使用 `--main` 参数可安装为主 Agent，部署到 `workspace/` 目录
-- **自动安装到所有检测到的 claw 目录**（OpenClaw / LightClaw），使用 `--claw-dir` 可指定单个 claw
+- **自动安装到所有检测到的 claw 目录**（OpenClaw / LightClaw），使用 `--clawtype` 可指定单个 claw
 - 如果目标目录已存在，CLI 会**自动备份**（复制到 `agentbackup/`）
 - 仅覆盖 `IDENTITY.md`、`SOUL.md` 等灵魂文件，不影响 workspace 中的其他运行时文件
 - 安装完成后自动重启 OpenClaw Gateway；若重启失败会提示手动重启
@@ -148,11 +148,11 @@ export SOULHUB_REGISTRY_URL=https://your-registry.example.com
 
 CLI 按以下优先级查找 claw 安装目录：
 
-1. `--claw-dir` 命令行参数（指定时只安装到该 claw）
+1. `--clawtype` 命令行参数（指定时只安装到该 claw）
 2. `OPENCLAW_HOME` / `LIGHTCLAW_HOME` 环境变量
 3. 默认路径 `~/.openclaw`、`~/.lightclaw`
 
-未指定 `--claw-dir` 时，CLI 会检测所有可用的 claw 目录并全部安装。
+未指定 `--clawtype` 时，CLI 会检测所有可用的 claw 目录并全部安装。
 
 ## 环境要求
 

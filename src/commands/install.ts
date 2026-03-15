@@ -36,12 +36,12 @@ import {
 import type { SoulHubPackage, BackupRecord } from "../types.js";
 
 /**
- * 解析 claw 目录：如果用户指定了 --claw-dir，直接使用（非交互式）；
+ * 解析 claw 目录：如果用户指定了 --clawtype，直接使用（非交互式）；
  * 否则检测所有候选目录，多个时交互选择，单个时直接使用。
  * @returns 解析后的 clawDir，如果用户取消选择则返回 null
  */
 async function resolveClawDir(clawDir?: string): Promise<string | null> {
-  // 如果用户通过 --claw-dir 指定了，直接使用（不触发选择）
+  // 如果用户通过 --clawtype 指定了，直接使用（不触发选择）
   if (clawDir) {
     return findOpenClawDir(clawDir);
   }
@@ -51,7 +51,7 @@ async function resolveClawDir(clawDir?: string): Promise<string | null> {
 
 /**
  * 解析所有 claw 目录（非交互式，全部返回）：
- * 如果用户指定了 --claw-dir，返回该单个目录；
+ * 如果用户指定了 --clawtype，返回该单个目录；
  * 否则返回所有检测到的 claw 目录。
  * @returns claw 目录列表
  */
@@ -75,8 +75,8 @@ export const installCommand = new Command("install")
     "Target directory (defaults to OpenClaw/LightClaw workspace)"
   )
   .option(
-    "--claw-dir <path>",
-    "OpenClaw/LightClaw installation directory (overrides OPENCLAW_HOME/LIGHTCLAW_HOME env var, defaults to ~/.openclaw or ~/.lightclaw)"
+    "--clawtype <type>",
+    "Specify claw type: OpenClaw or LightClaw (case-insensitive)"
   )
   .action(async (name: string | undefined, options) => {
     try {
@@ -85,10 +85,10 @@ export const installCommand = new Command("install")
 
       if (options.from) {
         // 从本地目录/ZIP/URL 安装，自动识别单/多 agent
-        await installFromSource(options.from, options.dir, options.clawDir, asMain);
+        await installFromSource(options.from, options.dir, options.clawtype, asMain);
       } else if (name) {
         // 从 registry 安装，自动识别是 agent 还是 recipe
-        await installFromRegistry(name, options.dir, options.clawDir, asMain);
+        await installFromRegistry(name, options.dir, options.clawtype, asMain);
       } else {
         console.error(chalk.red("Please specify an agent or team name, or use --from to install from a local source."));
         console.log(chalk.dim("  Examples:"));
@@ -96,7 +96,7 @@ export const installCommand = new Command("install")
         console.log(chalk.dim("    soulhub install writer-wechat --main     # Install as main agent"));
         console.log(chalk.dim("    soulhub install dev-squad                # Install a team from registry"));
         console.log(chalk.dim("    soulhub install --from ./agent-team/     # Install from local directory"));
-        console.log(chalk.dim("    soulhub install writer-wechat --claw-dir ~/.lightclaw  # Install to specific claw"));
+        console.log(chalk.dim("    soulhub install writer-wechat --clawtype LightClaw  # Install to specific claw"));
         process.exit(1);
       }
     } catch (error) {
@@ -153,7 +153,7 @@ async function installFromRegistry(
 /**
  * 安装单个 agent（分发函数）
  * 默认安装为子 agent，安装到所有检测到的 claw 目录。
- * 如果指定了 --claw-dir，只安装到该目录；如果指定了 --dir，直接安装到该目录。
+ * 如果指定了 --clawtype，只安装到该目录；如果指定了 --dir，直接安装到该目录。
  * @param asMain true = 安装为主 agent，false = 安装为子 agent
  */
 async function installSingleAgent(
@@ -1010,7 +1010,7 @@ async function extractZipToDir(
  */
 function printOpenClawInstallHelp(): void {
   console.log(chalk.dim("  Please install OpenClaw or LightClaw first, or use one of the following options:"));
-  console.log(chalk.dim("  --claw-dir <path>            Specify OpenClaw/LightClaw installation directory"));
+  console.log(chalk.dim("  --clawtype <type>            Specify claw type: OpenClaw or LightClaw"));
   console.log(chalk.dim("  --dir <path>                 Specify agent target directory directly"));
   console.log(chalk.dim("  OPENCLAW_HOME=<path>         Set environment variable (for OpenClaw)"));
   console.log(chalk.dim("  LIGHTCLAW_HOME=<path>        Set environment variable (for LightClaw)"));

@@ -23,18 +23,18 @@ export const rollbackCommand = new Command("rollback")
   .option("--list", "List available rollback records")
   .option("--id <id>", "Rollback to a specific backup record by ID")
   .option(
-    "--claw-dir <path>",
-    "OpenClaw/LightClaw installation directory (overrides OPENCLAW_HOME/LIGHTCLAW_HOME env var)"
+    "--clawtype <type>",
+    "Specify claw type: OpenClaw or LightClaw (case-insensitive)"
   )
   .action(async (options) => {
     try {
       if (options.list) {
         listBackupRecords();
       } else if (options.id) {
-        await performRollback(options.id, options.clawDir);
+        await performRollback(options.id, options.clawtype);
       } else {
         // 默认回滚到最近一次安装前的状态
-        await performRollback(undefined, options.clawDir);
+        await performRollback(undefined, options.clawtype);
       }
     } catch (error) {
       logger.errorObj("Rollback command failed", error);

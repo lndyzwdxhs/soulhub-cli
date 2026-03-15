@@ -153,14 +153,18 @@ export function copyAgentFilesFromPackage(packageDir: string, targetDir: string)
  * 优先级：customDir 参数 > OPENCLAW_HOME/LIGHTCLAW_HOME 环境变量 > 默认路径 ~/.openclaw 或 ~/.lightclaw > 当前目录
  */
 export function findOpenClawDir(customDir?: string): string | null {
-  // 1. 如果传入了自定义路径，直接使用
+  // 1. 如果指定了 --clawtype，映射到对应的品牌目录
   if (customDir) {
-    const resolved = path.resolve(customDir);
-    if (fs.existsSync(resolved)) {
-      return resolved;
+    const home = os.homedir();
+    const lower = customDir.toLowerCase();
+    if (lower === "openclaw") {
+      return path.join(home, ".openclaw");
     }
-    // 自定义路径不存在，也返回它（调用方可能会创建）
-    return resolved;
+    if (lower === "lightclaw") {
+      return path.join(home, ".lightclaw");
+    }
+    // 只支持 OpenClaw 和 LightClaw，其他值直接报错
+    throw new Error(`Unsupported claw type: "${customDir}". Only "OpenClaw" or "LightClaw" is supported (case-insensitive).`);
   }
 
   // 2. 检查 OPENCLAW_HOME / LIGHTCLAW_HOME 环境变量
@@ -196,10 +200,18 @@ export function findOpenClawDir(customDir?: string): string | null {
  * 否则返回所有存在的默认候选目录。
  */
 export function findAllClawDirs(customDir?: string): string[] {
-  // 1. 自定义路径 → 唯一
+  // 1. 指定了 --clawtype → 唯一
   if (customDir) {
-    const resolved = path.resolve(customDir);
-    return fs.existsSync(resolved) ? [resolved] : [resolved];
+    const home = os.homedir();
+    const lower = customDir.toLowerCase();
+    if (lower === "openclaw") {
+      return [path.join(home, ".openclaw")];
+    }
+    if (lower === "lightclaw") {
+      return [path.join(home, ".lightclaw")];
+    }
+    // 只支持 OpenClaw 和 LightClaw，其他值直接报错
+    throw new Error(`Unsupported claw type: "${customDir}". Only "OpenClaw" or "LightClaw" is supported (case-insensitive).`);
   }
 
   // 2. 环境变量 → 唯一
@@ -442,9 +454,11 @@ export function updateOpenClawConfig(
   clawDir: string,
   updater: (config: OpenClawConfig) => OpenClawConfig
 ): boolean {
-  const config = readOpenClawConfig(clawDir);
+  let config = readOpenClawConfig(clawDir);
   if (!config) {
-    return false;
+    // 配置文件不存在时，创建默认空配置
+    logger.info(`Config file not found in ${clawDir}, creating default config.`);
+    config = { agents: { list: [] } } as OpenClawConfig;
   }
   const updated = updater(config);
   writeOpenClawConfig(clawDir, updated);
@@ -579,7 +593,7 @@ export function detectPackageKind(dir: string): "agent" | "team" | "unknown" {
 
 /**
  * 检查 OpenClaw/LightClaw 是否已安装
- * 优先级：customDir 参数（--claw-dir）> OPENCLAW_HOME/LIGHTCLAW_HOME 环境变量 > 默认路径检测 > PATH 命令检测
+ * 优先级：customDir 参数（--clawtype）> OPENCLAW_HOME/LIGHTCLAW_HOME 环境变量 > 默认路径检测 > PATH 命令检测
  */
 export function checkOpenClawInstalled(customDir?: string): {
   installed: boolean;
@@ -614,7 +628,7 @@ export function checkOpenClawInstalled(customDir?: string): {
   return {
     installed: false,
     clawDir: null,
-    message: "OpenClaw/LightClaw is not installed. Please install first, use --claw-dir to specify directory, or set OPENCLAW_HOME/LIGHTCLAW_HOME environment variable.",
+message: "OpenClaw/LightClaw is not installed. Please install first, use --clawtype to specify type, or set OPENCLAW_HOME/LIGHTCLAW_HOME environment variable.",
   };
 }
 
