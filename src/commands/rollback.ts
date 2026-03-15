@@ -224,10 +224,10 @@ async function performRollback(
   );
 
   // 6. 重启 OpenClaw/LightClaw Gateway
-  const clawCmd = detectClawCommand();
+  const clawCmd = detectClawCommand(resolvedClawDir);
   const brandName = clawCmd === "lightclaw" ? "LightClaw" : "OpenClaw";
   const restartSpinner = createSpinner(`Restarting ${brandName} Gateway...`).start();
-  const result = restartOpenClawGateway();
+  const result = restartOpenClawGateway(resolvedClawDir);
   if (result.success) {
     restartSpinner.succeed(`${brandName} Gateway restarted successfully.`);
   } else {

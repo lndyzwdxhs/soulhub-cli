@@ -348,7 +348,7 @@ async function installSingleAgentToClaw(
 
   // 重启 OpenClaw Gateway
   if (!targetDir) {
-    await tryRestartGateway();
+    await tryRestartGateway(selectedClawDir || undefined);
   }
   console.log();
 }
@@ -443,7 +443,7 @@ async function installRecipeFromRegistry(
 
     // 注册 worker agent
     if (!targetDir) {
-      const regResult = registerAgentToOpenClaw(agentId, workerDir, clawDir);
+      const regResult = registerAgentToOpenClaw(agentId, workerDir, resolvedClawDir);
       if (!regResult.success) {
         console.log(chalk.yellow(`  ⚠ Failed to register ${agentId}: ${regResult.message}`));
         continue;
@@ -485,7 +485,7 @@ async function installRecipeFromRegistry(
 
   // 重启 OpenClaw Gateway
   if (!targetDir) {
-    await tryRestartGateway();
+    await tryRestartGateway(resolvedClawDir);
   }
 }
 
@@ -733,7 +733,7 @@ async function installSingleAgentFromDirToClaw(
 
   // 重启 OpenClaw Gateway
   if (!targetDir) {
-    await tryRestartGateway();
+    await tryRestartGateway(selectedClawDir || undefined);
   }
   console.log();
 }
@@ -858,7 +858,7 @@ async function installTeamFromDir(
 
     // 注册 worker（存量子 agent 已在步骤 2.5 中通过 mv 备份并移走）
     if (!targetDir) {
-      const regResult = registerAgentToOpenClaw(agentId, workerWorkspace, clawDir);
+      const regResult = registerAgentToOpenClaw(agentId, workerWorkspace, resolvedClawDir);
       if (!regResult.success) {
         console.log(chalk.yellow(`  ⚠ Failed to register ${agentId}: ${regResult.message}`));
         continue;
@@ -898,7 +898,7 @@ async function installTeamFromDir(
 
   // 重启 OpenClaw Gateway
   if (!targetDir) {
-    await tryRestartGateway();
+    await tryRestartGateway(resolvedClawDir);
   }
 }
 
@@ -1039,11 +1039,11 @@ function printTeamSummary(pkg: SoulHubPackage, workerIds: string[]): void {
  * 尝试重启 OpenClaw Gateway
  * 成功时显示成功提示，失败时提示用户手动重启
  */
-async function tryRestartGateway(): Promise<void> {
-  const clawCmd = detectClawCommand();
+async function tryRestartGateway(clawDir?: string): Promise<void> {
+  const clawCmd = detectClawCommand(clawDir);
   const brandName = clawCmd === "lightclaw" ? "LightClaw" : "OpenClaw";
   const restartSpinner = createSpinner(`Restarting ${brandName} Gateway...`).start();
-  const result = restartOpenClawGateway();
+  const result = restartOpenClawGateway(clawDir);
   if (result.success) {
     restartSpinner.succeed(`${brandName} Gateway restarted successfully.`);
   } else {

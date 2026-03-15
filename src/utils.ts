@@ -875,15 +875,15 @@ export const CATEGORY_LABELS: Record<string, string> = {
 export function registerAgentToOpenClaw(
   agentName: string,
   workspaceDir: string,
-  _clawDir?: string
+  clawDir?: string
 ): { success: boolean; message: string } {
   // 规范化 agent ID（与 OpenClaw/LightClaw 的 normalizeAgentId 逻辑一致：转小写，空格/下划线转连字符）
   const agentId = agentName.toLowerCase().replace(/[\s_]+/g, "-");
-  logger.debug(`Registering agent to OpenClaw/LightClaw`, { agentId, workspaceDir });
+  const brandName = clawDir ? detectClawBrand(clawDir) : "OpenClaw/LightClaw";
+  logger.debug(`Registering agent to ${brandName}`, { agentId, workspaceDir });
 
   try {
-    // 优先检测 lightclaw 命令，其次 openclaw
-    const clawCmd = detectClawCommand();
+    const clawCmd = detectClawCommand(clawDir);
     execSync(
       `${clawCmd} agents add "${agentId}" --workspace "${workspaceDir}" --non-interactive --json`,
       { stdio: "pipe", timeout: 15000 }
@@ -902,8 +902,8 @@ export function registerAgentToOpenClaw(
       // agent 已注册，但仍需更新配置（用户预期是更新 agent 内容）
       logger.info(`Agent "${agentId}" already exists in CLI, updating config...`);
       try {
-        const clawDir = _clawDir || path.dirname(workspaceDir);
-        addAgentToOpenClawConfig(clawDir, agentId, agentName, false);
+        const resolvedClawDir = clawDir || path.dirname(workspaceDir);
+        addAgentToOpenClawConfig(resolvedClawDir, agentId, agentName, false);
       } catch {
         // 更新配置失败不影响整体流程
         logger.warn(`Failed to update config for existing agent "${agentId}", skipping.`);
@@ -921,8 +921,8 @@ export function registerAgentToOpenClaw(
 
     try {
       // 从 workspaceDir 推导 clawDir（workspaceDir 格式为 <clawDir>/workspace-<agentId>）
-      const clawDir = _clawDir || path.dirname(workspaceDir);
-      const configUpdated = addAgentToOpenClawConfig(clawDir, agentId, agentName, false);
+      const resolvedClawDir = clawDir || path.dirname(workspaceDir);
+      const configUpdated = addAgentToOpenClawConfig(resolvedClawDir, agentId, agentName, false);
       if (configUpdated) {
         logger.info(`Agent "${agentId}" registered via config file fallback.`);
         return {
@@ -950,22 +950,25 @@ export function registerAgentToOpenClaw(
 /**
  * 检测可用的 claw CLI 命令（lightclaw 或 openclaw）
  */
-export function detectClawCommand(): string {
-  // 优先检测 lightclaw
+export function detectClawCommand(clawDir?: string): string {
+  // 如果传了 clawDir，根据品牌决定命令
+  if (clawDir) {
+    const brand = detectClawBrand(clawDir);
+    return brand === "LightClaw" ? "lightclaw" : "openclaw";
+  }
+  // 未传 clawDir 时，检测 PATH 中可用的命令（优先 lightclaw）
   try {
     execSync("which lightclaw 2>/dev/null || where lightclaw 2>nul", { stdio: "pipe" });
     return "lightclaw";
   } catch {
     // lightclaw 不可用
   }
-  // 回退到 openclaw
   try {
     execSync("which openclaw 2>/dev/null || where openclaw 2>nul", { stdio: "pipe" });
     return "openclaw";
   } catch {
     // openclaw 也不可用
   }
-  // 默认返回 openclaw
   return "openclaw";
 }
 
@@ -974,8 +977,8 @@ export function detectClawCommand(): string {
  * 执行 `openclaw/lightclaw gateway restart`，如果失败则提示用户手动重启
  * @returns 重启结果
  */
-export function restartOpenClawGateway(): { success: boolean; message: string } {
-  const clawCmd = detectClawCommand();
+export function restartOpenClawGateway(clawDir?: string): { success: boolean; message: string } {
+  const clawCmd = detectClawCommand(clawDir);
   logger.debug(`Restarting ${clawCmd} Gateway`);
   try {
     execSync(`${clawCmd} gateway restart`, {
