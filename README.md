@@ -42,7 +42,7 @@ npx soulhubcli <command>
 | `soulhub info <name> --identity` | 显示 IDENTITY.md 内容 |
 | `soulhub info <name> --soul` | 显示 SOUL.md 内容 |
 | `soulhub info <name> --json` | 以 JSON 格式输出 Agent 详情 |
-| `soulhub install <name>` | 从 Registry 安装 Agent 或团队（交互式：选择角色和目标 claw） |
+| `soulhub install <name>` | 从 Registry 安装 Agent 或团队（交互式：选择角色和目标 Claw） |
 | `soulhub install <name> --role main` | 安装为主 Agent（跳过角色选择） |
 | `soulhub install <name> --role worker` | 安装为 Worker Agent（跳过角色选择） |
 | `soulhub install <name> --claw-type <type>` | 指定 claw 类型（跳过 claw 选择） |
@@ -92,7 +92,7 @@ soulhub search writer --json
 
 CLI 会自动识别目标是单 Agent 还是多 Agent 团队，无需手动区分。
 
-**默认行为：交互式安装。** CLI 会提示用户选择安装角色（主 Agent / Worker Agent）以及目标 claw 目录（支持多选）。通过命令行参数可跳过交互，实现完全非交互式安装。
+**默认行为：交互式安装。** CLI 会提示用户选择安装角色（主 Agent / Worker Agent）以及目标 Claw 目录（单选）。通过命令行参数可跳过交互，实现完全非交互式安装。
 
 **从 Registry 安装：**
 
@@ -215,8 +215,8 @@ soulhub rollback --id <record-id>
 1. 展示 Agent 基本信息（名称、版本、描述、分类、标签）
 2. 提示选择安装角色：**Main Agent** 或 **Worker Agent**
 3. 安装为 Main Agent 时，警告将覆盖当前 workspace 内容（人格文件会被替换，记忆不受影响），需用户确认（或使用 `-y` 跳过）
-4. 提示多选目标 claw 目录（OpenClaw / LightClaw），可同时安装到多个 claw
-5. 执行安装、注册、重启
+4. 提示单选目标 Claw 目录（OpenClaw / LightClaw），一次只安装到一个 Claw
+5. 执行安装、注册，并提示用户重启
 
 ### 单 Agent 安装
 
@@ -224,7 +224,7 @@ soulhub rollback --id <record-id>
 - 安装为 **Main Agent** 时，部署到 `workspace/` 目录，会覆盖已有人格文件
 - 安装前自动备份已有内容到 `~/.soulhub/backups/<claw>/`（按 claw 类型分目录存储）
 - 仅覆盖 `IDENTITY.md`、`SOUL.md` 等灵魂文件，不影响 workspace 中的其他运行时文件
-- 安装完成后自动重启 OpenClaw/LightClaw Gateway；若重启失败会提示手动重启
+- 安装完成后提示用户重启 OpenClaw/LightClaw Gateway
 
 ### 多 Agent 团队安装
 
@@ -233,7 +233,7 @@ soulhub rollback --id <record-id>
 - 安装前自动备份存量子 Agent（mv 方式移走已有 worker 目录）
 - 自动配置多 Agent 之间的通信
 - Worker Agent 自动注册到 claw 配置中
-- 安装完成后自动重启 OpenClaw/LightClaw Gateway
+- 安装完成后提示用户重启 OpenClaw/LightClaw Gateway
 
 ### 备份与回滚
 
@@ -264,7 +264,7 @@ CLI 按以下优先级查找 claw 安装目录：
 3. `OPENCLAW_HOME` / `LIGHTCLAW_HOME` 环境变量
 4. 默认路径 `~/.openclaw`、`~/.lightclaw`
 
-未指定 `--claw-type` 或 `--dir` 时，CLI 会检测所有可用的 claw 目录，多个时交互式多选。
+未指定 `--claw-type` 或 `--dir` 时，CLI 会检测所有可用的 Claw 目录，多个时交互式单选（一次只安装到一个 Claw）。
 
 ## 环境要求
 

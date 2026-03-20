@@ -4,7 +4,7 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import { select, checkbox, confirm as inquirerConfirm } from "@inquirer/prompts";
+import { select, confirm as inquirerConfirm } from "@inquirer/prompts";
 import yaml from "js-yaml";
 import { extract as tarExtract } from "tar";
 import type {
@@ -193,7 +193,7 @@ export function findOpenClawDir(customDir?: string): string | null {
 }
 
 /**
- * 查找所有已安装的 claw 目录（用于多选场景）
+ * 查找所有已安装的 claw 目录（用于单选场景）
  * 当 customDir 或环境变量已指定时，只返回那一个；
  * 否则返回所有存在的默认候选目录。
  */
@@ -872,9 +872,9 @@ export async function promptSelectRole(): Promise<"main" | "worker" | null> {
 }
 
 /**
- * 交互式提示用户多选 claw 目录
+ * 交互式提示用户单选 claw 目录（一次只安装到一个 claw）
  * 如果只有一个 claw 目录，自动选中并返回。
- * @returns 选中的 claw 目录列表，用户取消时返回空数组
+ * @returns 选中的单个 claw 目录（包装为数组），用户取消时返回空数组
  */
 export async function promptMultiSelectClawDirs(): Promise<string[]> {
   const dirs = findAllClawDirs();
@@ -890,20 +890,16 @@ export async function promptMultiSelectClawDirs(): Promise<string[]> {
     return dirs;
   }
 
-  // 多个候选目录，使用上下键多选（空格选中，回车确认）
+  // 多个候选目录，使用上下键单选
   try {
-    const selected = await checkbox({
-      message: "Select target Claw installations (space to toggle, enter to confirm):",
+    const selected = await select({
+      message: "Select target Claw installation:",
       choices: dirs.map((dir) => {
         const brand = detectClawBrand(dir);
-        return { name: `${brand}  ${dir}`, value: dir, checked: true };
+        return { name: `${brand}  ${dir}`, value: dir };
       }),
     });
-
-    if (selected.length === 0) {
-      console.log("  No claw selected, operation cancelled.");
-    }
-    return selected;
+    return [selected];
   } catch {
     // 用户按 Ctrl+C 取消
     return [];

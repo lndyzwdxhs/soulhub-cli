@@ -24,7 +24,6 @@ import {
   detectPackageKind,
   configureMultiAgentCommunication,
   addAgentToOpenClawConfig,
-  restartOpenClawGateway,
   createBackupRecord,
   addBackupItem,
   commitBackupRecord,
@@ -53,17 +52,19 @@ async function resolveClawDir(clawDir?: string): Promise<string | null> {
 }
 
 /**
- * 解析所有 claw 目录（非交互式，全部返回）：
+ * 解析 claw 目录（非交互式）：
  * 如果用户指定了 --claw-type，返回该单个目录；
- * 否则返回所有检测到的 claw 目录。
- * @returns claw 目录列表
+ * 否则返回检测到的第一个 claw 目录。
+ * @returns claw 目录（包装为数组），未找到时返回空数组
  */
 function resolveAllClawDirs(clawDir?: string): string[] {
   if (clawDir) {
     const resolved = findOpenClawDir(clawDir);
     return resolved ? [resolved] : [];
   }
-  return findAllClawDirs();
+  const all = findAllClawDirs();
+  // 一次只安装到一个 claw，取第一个
+  return all.length > 0 ? [all[0]] : [];
 }
 
 
@@ -146,10 +147,11 @@ async function resolveRole(explicitMain?: boolean): Promise<boolean | null> {
 }
 
 /**
- * 解析安装目标 claw 目录列表：如果命令行已指定 claw-type 则用指定的，否则交互式多选。
+ * 解析安装目标 claw 目录：如果命令行已指定 claw-type 则用指定的，否则交互式单选。
+ * 一次只安装到一个 claw，更清晰。
  * @param clawDir --claw-type 参数值
  * @param clawExplicit 是否通过命令行参数显式指定了 claw
- * @returns claw 目录列表，空数组表示未找到或用户取消
+ * @returns claw 目录（包装为数组，最多一个元素），空数组表示未找到或用户取消
  */
 async function resolveClawDirsInteractive(clawDir?: string, clawExplicit?: boolean): Promise<string[]> {
   if (clawDir) {
@@ -160,7 +162,7 @@ async function resolveClawDirsInteractive(clawDir?: string, clawExplicit?: boole
     // --dir 指定了，由调用者处理
     return [];
   }
-  // 交互式多选
+  // 交互式单选
   return promptMultiSelectClawDirs();
 }
 
@@ -218,7 +220,7 @@ async function installFromRegistry(
       }
     }
 
-    // 解析目标 claw 目录（交互式多选或命令行指定）
+  // 解析目标 claw 目录（交互式单选或命令行指定）
     let resolvedClawDirs: string[] | undefined;
     if (!targetDir) {
       resolvedClawDirs = await resolveClawDirsInteractive(clawDir, clawExplicit);
@@ -302,15 +304,14 @@ async function installSingleAgent(
   const pkgDir = await downloadAgentPackage(name, agent.version);
   spinner.succeed(`Package ${chalk.cyan(agent.displayName)} downloaded.`);
 
-  // 逐个 claw 目录安装（每个 claw 单独重启）
-  const showClawHeader = allClawDirs.length > 1;
-  for (const selectedClawDir of allClawDirs) {
-    if (showClawHeader) {
-      const brand = detectClawBrand(selectedClawDir);
-      console.log();
-      console.log(chalk.bold(`── ${brand} (${selectedClawDir}) ──`));
-    }
+  // 安装到选定的 claw 目录（一次只安装一个）
+  const selectedClawDir = allClawDirs[0];
+  try {
     await installSingleAgentToClaw(name, selectedClawDir, undefined, asMain, pkgDir, agent);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error(`Failed to install to ${selectedClawDir}`, { error: errMsg });
+    console.error(chalk.red(`  ✗ Installation failed for ${selectedClawDir}: ${errMsg}`));
   }
 
   // 清理临时包目录
@@ -550,30 +551,36 @@ async function installRecipeFromRegistry(
     const agentName = worker.dir || worker.name; // dir 可能是 registry 中的 template 名
     const agentId = worker.name; // agentId 可能是自定义短名
 
-    const workerDir = targetDir
-      ? path.join(resolvedClawDir, `workspace-${agentId}`)
-      : getWorkspaceDir(resolvedClawDir, agentId);
+    try {
+      const workerDir = targetDir
+        ? path.join(resolvedClawDir, `workspace-${agentId}`)
+        : getWorkspaceDir(resolvedClawDir, agentId);
 
-    // 注册 worker agent
-    if (!targetDir) {
-      const regResult = registerAgentToOpenClaw(agentId, workerDir, resolvedClawDir);
-      if (!regResult.success) {
-        console.log(chalk.yellow(`  ⚠ Failed to register ${agentId}: ${regResult.message}`));
-        continue;
+      // 注册 worker agent
+      if (!targetDir) {
+        const regResult = registerAgentToOpenClaw(agentId, workerDir, resolvedClawDir);
+        if (!regResult.success) {
+          console.log(chalk.yellow(`  ⚠ Failed to register ${agentId}: ${regResult.message}`));
+          continue;
+        }
+      } else {
+        fs.mkdirSync(workerDir, { recursive: true });
       }
-    } else {
-      fs.mkdirSync(workerDir, { recursive: true });
+
+      // 从 COS 下载 agent tar.gz 包并解压
+      const agentInfo = index.agents.find((a) => a.name === agentName);
+      const agentVersion = agentInfo?.version || "latest";
+      const pkgDir = await downloadAgentPackage(agentName, agentVersion);
+      copyAgentFilesFromPackage(pkgDir, workerDir);
+      fs.rmSync(pkgDir, { recursive: true, force: true });
+
+      recordInstall(agentId, recipe.version || "1.0.0", workerDir);
+      workerIds.push(agentId);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error(`Failed to install worker ${agentId}`, { error: errMsg });
+      console.log(chalk.red(`  ✗ Failed to install worker ${agentId}: ${errMsg}`));
     }
-
-    // 从 COS 下载 agent tar.gz 包并解压
-    const agentInfo = index.agents.find((a) => a.name === agentName);
-    const agentVersion = agentInfo?.version || "latest";
-    const pkgDir = await downloadAgentPackage(agentName, agentVersion);
-    copyAgentFilesFromPackage(pkgDir, workerDir);
-    fs.rmSync(pkgDir, { recursive: true, force: true });
-
-    recordInstall(agentId, recipe.version || "1.0.0", workerDir);
-    workerIds.push(agentId);
   }
 
   // 5. 配置多 agent 通信
@@ -737,7 +744,7 @@ async function installSingleAgentFromDir(
     return;
   }
 
-  // 获取所有 claw 目录（交互式多选或命令行指定）
+  // 获取所有 claw 目录（交互式单选或命令行指定）
   const allClawDirs = await resolveClawDirsInteractive(clawDir, clawExplicit);
   if (allClawDirs.length === 0) {
     console.log(chalk.red("OpenClaw/LightClaw workspace directory not found."));
@@ -745,15 +752,14 @@ async function installSingleAgentFromDir(
     return;
   }
 
-  // 逐个 claw 目录安装（每个 claw 单独重启）
-  const showClawHeader = allClawDirs.length > 1;
-  for (const selectedClawDir of allClawDirs) {
-    if (showClawHeader) {
-      const brand = detectClawBrand(selectedClawDir);
-      console.log();
-      console.log(chalk.bold(`── ${brand} (${selectedClawDir}) ──`));
-    }
+  // 安装到选定的 claw 目录（一次只安装一个）
+  const selectedClawDir = allClawDirs[0];
+  try {
     await installSingleAgentFromDirToClaw(packageDir, agentName, pkg, selectedClawDir, undefined, asMain);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error(`Failed to install to ${selectedClawDir}`, { error: errMsg });
+    console.error(chalk.red(`  ✗ Installation failed for ${selectedClawDir}: ${errMsg}`));
   }
 }
 
@@ -988,29 +994,35 @@ async function installTeamFromDir(
 
     spinner.text = `Installing worker ${chalk.cyan(agentId)}...`;
 
-    const workerWorkspace = targetDir
-      ? path.join(resolvedClawDir, `workspace-${agentId}`)
-      : getWorkspaceDir(resolvedClawDir, agentId);
+    try {
+      const workerWorkspace = targetDir
+        ? path.join(resolvedClawDir, `workspace-${agentId}`)
+        : getWorkspaceDir(resolvedClawDir, agentId);
 
-    // 注册 worker（存量子 agent 已在步骤 2.5 中通过 mv 备份并移走）
-    if (!targetDir) {
-      const regResult = registerAgentToOpenClaw(agentId, workerWorkspace, resolvedClawDir);
-      if (!regResult.success) {
-        console.log(chalk.yellow(`  ⚠ Failed to register ${agentId}: ${regResult.message}`));
-        continue;
+      // 注册 worker（存量子 agent 已在步骤 2.5 中通过 mv 备份并移走）
+      if (!targetDir) {
+        const regResult = registerAgentToOpenClaw(agentId, workerWorkspace, resolvedClawDir);
+        if (!regResult.success) {
+          console.log(chalk.yellow(`  ⚠ Failed to register ${agentId}: ${regResult.message}`));
+          continue;
+        }
+      } else {
+        fs.mkdirSync(workerWorkspace, { recursive: true });
       }
-    } else {
-      fs.mkdirSync(workerWorkspace, { recursive: true });
-    }
 
-    // 复制 worker 文件
-    const workerSourceDir = path.join(packageDir, agentDir);
-    if (fs.existsSync(workerSourceDir)) {
-      copyAgentFilesFromDir(workerSourceDir, workerWorkspace);
-    }
+      // 复制 worker 文件
+      const workerSourceDir = path.join(packageDir, agentDir);
+      if (fs.existsSync(workerSourceDir)) {
+        copyAgentFilesFromDir(workerSourceDir, workerWorkspace);
+      }
 
-    recordInstall(agentId, pkg.version || "local", workerWorkspace);
-    workerIds.push(agentId);
+      recordInstall(agentId, pkg.version || "local", workerWorkspace);
+      workerIds.push(agentId);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error(`Failed to install worker ${agentId}`, { error: errMsg });
+      console.log(chalk.red(`  ✗ Failed to install worker ${agentId}: ${errMsg}`));
+    }
   }
 
   // 5. 配置多 agent 通信
@@ -1172,19 +1184,14 @@ function printTeamSummary(pkg: SoulHubPackage, workerIds: string[]): void {
 }
 
 /**
- * 尝试重启 OpenClaw Gateway
- * 成功时显示成功提示，失败时提示用户手动重启
+ * 提示用户手动重启 OpenClaw/LightClaw Gateway
  */
 async function tryRestartGateway(clawDir?: string): Promise<void> {
   const clawCmd = detectClawCommand(clawDir);
   const brandName = clawCmd === "lightclaw" ? "LightClaw" : "OpenClaw";
-  const restartSpinner = createSpinner(`Restarting ${brandName} Gateway...`).start();
-  const result = restartOpenClawGateway(clawDir);
-  if (result.success) {
-    restartSpinner.succeed(`${brandName} Gateway restarted successfully.`);
-  } else {
-    restartSpinner.warn(`Failed to restart ${brandName} Gateway. Please restart it manually.`);
-  }
+  console.log();
+  console.log(chalk.yellow(`  ⚠ Please restart ${brandName} Gateway to apply changes:`));
+  console.log(chalk.cyan(`    ${clawCmd} gateway restart`));
 }
 
 

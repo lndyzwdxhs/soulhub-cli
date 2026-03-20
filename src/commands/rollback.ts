@@ -10,7 +10,6 @@ import {
   saveBackupManifest,
   findOpenClawDir,
   writeOpenClawConfig,
-  restartOpenClawGateway,
   getMainWorkspaceDir,
   getWorkspaceDir,
   detectClawBrand,
@@ -393,19 +392,12 @@ async function executeRollback(record: BackupRecord, clawDir?: string): Promise<
     `Rolled back ${chalk.cyan.bold(record.packageName)} successfully! (${restoredCount} item(s) restored)`
   );
 
-  // 6. 重启 OpenClaw/LightClaw Gateway
+  // 6. 提示用户手动重启 OpenClaw/LightClaw Gateway
   const clawCmd = detectClawCommand(resolvedClawDir);
   const brandName = clawCmd === "lightclaw" ? "LightClaw" : "OpenClaw";
-  const restartSpinner = createSpinner(`Restarting ${brandName} Gateway...`).start();
-  const result = restartOpenClawGateway(resolvedClawDir);
-  if (result.success) {
-    restartSpinner.succeed(`${brandName} Gateway restarted successfully.`);
-  } else {
-    restartSpinner.warn(`Failed to restart ${brandName} Gateway.`);
-    console.log(chalk.yellow(`  Reason: ${result.message}`));
-    console.log(chalk.dim("  Please restart manually:"));
-    console.log(chalk.dim(`    ${clawCmd} gateway restart`));
-  }
+  console.log();
+  console.log(chalk.yellow(`  ⚠ Please restart ${brandName} Gateway to apply changes:`));
+  console.log(chalk.cyan(`    ${clawCmd} gateway restart`));
 
   console.log();
 }
