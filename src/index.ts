@@ -4,7 +4,10 @@ import { infoCommand } from "./commands/info.js";
 import { installCommand } from "./commands/install.js";
 import { listCommand } from "./commands/list.js";
 import { updateCommand } from "./commands/update.js";
+import { uninstallCommand } from "./commands/uninstall.js";
 import { rollbackCommand } from "./commands/rollback.js";
+// TODO: publish 功能尚未完善，暂不对外开放，待 registry 审核流程和权限体系就绪后再启用
+// import { publishCommand } from "./commands/publish.js";
 import { logger } from "./logger.js";
 
 declare const __VERSION__: string;
@@ -32,6 +35,9 @@ program.addCommand(infoCommand);
 program.addCommand(installCommand);
 program.addCommand(listCommand);
 program.addCommand(updateCommand);
+program.addCommand(uninstallCommand);
 program.addCommand(rollbackCommand);
+// TODO: publish 功能暂不对外开放
+// program.addCommand(publishCommand);
 
 program.parse();

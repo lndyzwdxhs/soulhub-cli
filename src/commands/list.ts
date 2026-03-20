@@ -6,18 +6,35 @@ import { logger } from "../logger.js";
 export const listCommand = new Command("list")
   .description("List installed agents")
   .alias("ls")
-  .action(async () => {
+  .option("--json", "Output results in JSON format")
+  .action(async (options) => {
     try {
       const config = loadConfig();
 
       if (config.installed.length === 0) {
-        console.log(chalk.yellow("\n  No agents installed yet.\n"));
-        console.log(
-          chalk.dim("  Install one: soulhub install <name>")
-        );
-        console.log(
-          chalk.dim("  Browse all:  soulhub search\n")
-        );
+        if (options.json) {
+          console.log(JSON.stringify([], null, 2));
+        } else {
+          console.log(chalk.yellow("\n  No agents installed yet.\n"));
+          console.log(
+            chalk.dim("  Install one: soulhub install <name>")
+          );
+          console.log(
+            chalk.dim("  Browse all:  soulhub search\n")
+          );
+        }
+        return;
+      }
+
+      // JSON 输出模式
+      if (options.json) {
+        const jsonOutput = config.installed.map((a) => ({
+          name: a.name,
+          version: a.version,
+          installedAt: a.installedAt,
+          workspace: a.workspace,
+        }));
+        console.log(JSON.stringify(jsonOutput, null, 2));
         return;
       }
 

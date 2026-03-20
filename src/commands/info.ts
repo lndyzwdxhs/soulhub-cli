@@ -8,6 +8,7 @@ export const infoCommand = new Command("info")
   .argument("<name>", "Agent name")
   .option("--identity", "Show IDENTITY.md content")
   .option("--soul", "Show SOUL.md content")
+  .option("--json", "Output results in JSON format")
   .action(async (name: string, options) => {
     try {
       const index = await fetchIndex();
@@ -23,6 +24,24 @@ export const infoCommand = new Command("info")
 
       const category =
         CATEGORY_LABELS[agent.category] || agent.category;
+
+      // JSON 输出模式
+      if (options.json) {
+        const jsonOutput: Record<string, unknown> = {
+          name: agent.name,
+          displayName: agent.displayName,
+          version: agent.version,
+          description: agent.description,
+          category: agent.category,
+          author: agent.author,
+          tags: agent.tags,
+          minClawVersion: agent.minClawVersion,
+          downloads: agent.downloads,
+          files: agent.files,
+        };
+        console.log(JSON.stringify(jsonOutput, null, 2));
+        return;
+      }
 
       console.log();
       console.log(chalk.bold.cyan(`  ${agent.displayName}`));

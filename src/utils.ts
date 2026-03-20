@@ -153,7 +153,7 @@ export function copyAgentFilesFromPackage(packageDir: string, targetDir: string)
  * 优先级：customDir 参数 > OPENCLAW_HOME/LIGHTCLAW_HOME 环境变量 > 默认路径 ~/.openclaw 或 ~/.lightclaw > 当前目录
  */
 export function findOpenClawDir(customDir?: string): string | null {
-  // 1. 如果指定了 --clawtype，映射到对应的品牌目录
+  // 1. 如果指定了 --claw-type，映射到对应的品牌目录
   if (customDir) {
     const home = os.homedir();
     const lower = customDir.toLowerCase();
@@ -200,7 +200,7 @@ export function findOpenClawDir(customDir?: string): string | null {
  * 否则返回所有存在的默认候选目录。
  */
 export function findAllClawDirs(customDir?: string): string[] {
-  // 1. 指定了 --clawtype → 唯一
+  // 1. 指定了 --claw-type → 唯一
   if (customDir) {
     const home = os.homedir();
     const lower = customDir.toLowerCase();
@@ -593,7 +593,7 @@ export function detectPackageKind(dir: string): "agent" | "team" | "unknown" {
 
 /**
  * 检查 OpenClaw/LightClaw 是否已安装
- * 优先级：customDir 参数（--clawtype）> OPENCLAW_HOME/LIGHTCLAW_HOME 环境变量 > 默认路径检测 > PATH 命令检测
+ * 优先级：customDir 参数（--claw-type）> OPENCLAW_HOME/LIGHTCLAW_HOME 环境变量 > 默认路径检测 > PATH 命令检测
  */
 export function checkOpenClawInstalled(customDir?: string): {
   installed: boolean;
@@ -628,14 +628,24 @@ export function checkOpenClawInstalled(customDir?: string): {
   return {
     installed: false,
     clawDir: null,
-message: "OpenClaw/LightClaw is not installed. Please install first, use --clawtype to specify type, or set OPENCLAW_HOME/LIGHTCLAW_HOME environment variable.",
+    message: "OpenClaw/LightClaw is not installed. Please install first, use --claw-type to specify type, or set OPENCLAW_HOME/LIGHTCLAW_HOME environment variable.",
   };
 }
 
 /**
+ * 获取统一的备份基础目录
+ * 按 claw 品牌分文件夹存放：~/.soulhub/backups/openclaw/ 或 ~/.soulhub/backups/lightclaw/
+ */
+export function getBackupBaseDir(clawDir: string): string {
+  const home = process.env.HOME || "~";
+  const brand = detectClawBrand(clawDir).toLowerCase(); // "openclaw" | "lightclaw"
+  return path.join(home, ".soulhub", "backups", brand);
+}
+
+/**
  * 备份 agent 工作目录
- * 将 workspace 目录复制（cp）到 ~/.openclaw/agentbackup/ 下，原目录保持不变
- * 例如：~/.openclaw/workspace → 复制到 ~/.openclaw/agentbackup/workspace
+ * 将 workspace 目录复制（cp）到 ~/.soulhub/backups/<brand>/ 下，原目录保持不变
+ * 例如：~/.openclaw/workspace → 复制到 ~/.soulhub/backups/openclaw/workspace
  * 如果备份目录中已存在同名文件夹，则追加时间戳
  */
 export function backupAgentWorkspace(workspaceDir: string): string | null {
@@ -649,9 +659,9 @@ export function backupAgentWorkspace(workspaceDir: string): string | null {
     return null; // 空目录，无需备份
   }
 
-  // 在 openclaw 目录下创建 agentbackup 目录
+  // 在统一备份目录下创建对应品牌的子目录
   const clawDir = path.dirname(workspaceDir);
-  const backupBaseDir = path.join(clawDir, "agentbackup");
+  const backupBaseDir = getBackupBaseDir(clawDir);
   if (!fs.existsSync(backupBaseDir)) {
     fs.mkdirSync(backupBaseDir, { recursive: true });
   }
@@ -673,7 +683,7 @@ export function backupAgentWorkspace(workspaceDir: string): string | null {
 
 /**
  * 备份 agent 工作目录（mv 移动方式）
- * 将 workspace 目录直接移动到 ~/.openclaw/agentbackup/ 下，原目录被移走
+ * 将 workspace 目录直接移动到 ~/.soulhub/backups/<brand>/ 下，原目录被移走
  * 适用于子 agent 备份场景，避免磁盘空间翻倍
  */
 export function moveBackupAgentWorkspace(workspaceDir: string): string | null {
@@ -687,9 +697,9 @@ export function moveBackupAgentWorkspace(workspaceDir: string): string | null {
     return null; // 空目录，无需备份
   }
 
-  // 在 openclaw 目录下创建 agentbackup 目录
+  // 在统一备份目录下创建对应品牌的子目录
   const clawDir = path.dirname(workspaceDir);
-  const backupBaseDir = path.join(clawDir, "agentbackup");
+  const backupBaseDir = getBackupBaseDir(clawDir);
   if (!fs.existsSync(backupBaseDir)) {
     fs.mkdirSync(backupBaseDir, { recursive: true });
   }
@@ -702,8 +712,14 @@ export function moveBackupAgentWorkspace(workspaceDir: string): string | null {
     backupDir = path.join(backupBaseDir, `${dirName}-${timestamp}`);
   }
 
-  // 移动文件夹到备份目录（原目录被移走）
-  fs.renameSync(workspaceDir, backupDir);
+  // 跨设备 mv 兼容：先尝试 rename，失败则 cp + rm
+  try {
+    fs.renameSync(workspaceDir, backupDir);
+  } catch {
+    // rename 跨文件系统失败时，使用 cp + rm
+    fs.cpSync(workspaceDir, backupDir, { recursive: true });
+    fs.rmSync(workspaceDir, { recursive: true, force: true });
+  }
   logger.info(`Workspace moved to backup`, { from: workspaceDir, to: backupDir });
 
   return backupDir;
@@ -711,7 +727,7 @@ export function moveBackupAgentWorkspace(workspaceDir: string): string | null {
 
 /**
  * 批量备份存量子 agent 工作目录（mv 移动方式）
- * 在安装多 agent 团队前调用，把所有 workspace-* 目录移动到 agentbackup/
+ * 在安装多 agent 团队前调用，把所有 workspace-* 目录移动到 ~/.soulhub/backups/<brand>/
  * @returns 备份结果列表
  */
 export function backupAllWorkerWorkspaces(clawDir: string): { name: string; backupDir: string }[] {
@@ -853,6 +869,141 @@ export function commitBackupRecord(record: BackupRecord): void {
   manifest.records.unshift(record);
   saveBackupManifest(manifest);
   logger.info(`Backup record saved`, { id: record.id, items: record.items.length, workers: record.installedWorkerIds.length });
+}
+
+// ==========================================
+// 交互式提示辅助函数
+// ==========================================
+
+/**
+ * 交互式提示用户选择安装角色（main / worker）
+ * @returns "main" 或 "worker"，用户取消时返回 null
+ */
+export async function promptSelectRole(): Promise<"main" | "worker" | null> {
+  console.log();
+  console.log("  ? Install as:");
+  console.log();
+  console.log("    1) 👷  Worker agent  (子Agent，安装到 workspace-<name>/ 目录)");
+  console.log("    2) 👑  Main agent    (主Agent，安装到 workspace/ 目录)");
+  console.log();
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise<"main" | "worker" | null>((resolve) => {
+    rl.question("  Please select (1-2) [1]: ", (answer) => {
+      rl.close();
+      const trimmed = answer.trim();
+      if (trimmed === "" || trimmed === "1") {
+        resolve("worker");
+      } else if (trimmed === "2") {
+        resolve("main");
+      } else {
+        console.log("  Invalid selection, operation cancelled.");
+        resolve(null);
+      }
+    });
+  });
+}
+
+/**
+ * 交互式提示用户多选 claw 目录
+ * 如果只有一个 claw 目录，自动选中并返回。
+ * @returns 选中的 claw 目录列表，用户取消时返回空数组
+ */
+export async function promptMultiSelectClawDirs(): Promise<string[]> {
+  const dirs = findAllClawDirs();
+
+  if (dirs.length === 0) {
+    return [];
+  }
+
+  if (dirs.length === 1) {
+    const brand = detectClawBrand(dirs[0]);
+    console.log();
+    console.log(`  ✔ Detected ${brand}: ${dirs[0]}`);
+    return dirs;
+  }
+
+  // 多个候选目录，让用户多选
+  console.log();
+  console.log("  ? Select target Claw installations (multiple allowed):");
+  console.log();
+  dirs.forEach((dir, index) => {
+    const brand = detectClawBrand(dir);
+    console.log(`    ${index + 1}) ${brand}  ${dir}`);
+  });
+  console.log();
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise<string[]>((resolve) => {
+    const allNums = dirs.map((_, i) => String(i + 1)).join(",");
+    rl.question(`  Enter numbers separated by comma (e.g. 1,2) [${allNums}]: `, (answer) => {
+      rl.close();
+      const trimmed = answer.trim();
+
+      // 默认选择所有
+      if (trimmed === "") {
+        resolve(dirs);
+        return;
+      }
+
+      const parts = trimmed.split(",").map((s) => s.trim());
+      const selected: string[] = [];
+      for (const part of parts) {
+        const idx = parseInt(part, 10);
+        if (idx >= 1 && idx <= dirs.length) {
+          const dir = dirs[idx - 1];
+          if (!selected.includes(dir)) {
+            selected.push(dir);
+          }
+        } else {
+          console.log(`  Invalid selection: ${part}, operation cancelled.`);
+          resolve([]);
+          return;
+        }
+      }
+
+      if (selected.length === 0) {
+        console.log("  No claw selected, operation cancelled.");
+      }
+      resolve(selected);
+    });
+  });
+}
+
+/**
+ * 交互式确认提示
+ * @param message 提示信息
+ * @param defaultYes 默认值是否为 yes
+ * @returns true = 确认，false = 取消
+ */
+export async function promptConfirm(message: string, defaultYes: boolean = true): Promise<boolean> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const hint = defaultYes ? "Y/n" : "y/N";
+  return new Promise<boolean>((resolve) => {
+    rl.question(`  ${message} (${hint}) `, (answer) => {
+      rl.close();
+      const trimmed = answer.trim().toLowerCase();
+      if (trimmed === "") {
+        resolve(defaultYes);
+      } else if (trimmed === "y" || trimmed === "yes") {
+        resolve(true);
+      } else {
+        resolve(false);
+      }
+    });
+  });
 }
 
 /**

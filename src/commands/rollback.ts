@@ -2,6 +2,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import fs from "node:fs";
 import path from "node:path";
+import readline from "node:readline";
 import { createSpinner } from "../spinner.js";
 import { logger } from "../logger.js";
 import {
@@ -14,7 +15,6 @@ import {
   getWorkspaceDir,
   detectClawBrand,
   detectClawCommand,
-  promptSelectClawDir,
 } from "../utils.js";
 import type { BackupRecord } from "../types.js";
 
@@ -22,19 +22,25 @@ export const rollbackCommand = new Command("rollback")
   .description("Rollback to a previous agent installation state")
   .option("--list", "List available rollback records")
   .option("--id <id>", "Rollback to a specific backup record by ID")
+  .option("--last <n>", "Rollback the Nth most recent installation (1 = latest, 2 = second latest, etc.)", parseInt)
   .option(
-    "--clawtype <type>",
+    "--claw-type <type>",
     "Specify claw type: OpenClaw or LightClaw (case-insensitive)"
   )
+  .option("-y, --yes", "Skip all confirmation prompts (auto-confirm)")
   .action(async (options) => {
     try {
+      const skipConfirm = !!options.yes;
       if (options.list) {
         listBackupRecords();
       } else if (options.id) {
-        await performRollback(options.id, options.clawtype);
+        await performRollback(options.id, options.clawType, skipConfirm);
+      } else if (options.last) {
+        // --last <n>：非交互式，直接回滚倒数第 n 个
+        await performRollbackByIndex(options.last, options.clawType, skipConfirm);
       } else {
-        // 默认回滚到最近一次安装前的状态
-        await performRollback(undefined, options.clawtype);
+        // 默认进入交互式选择
+        await interactiveRollback(options.clawType);
       }
     } catch (error) {
       logger.errorObj("Rollback command failed", error);
@@ -59,37 +65,105 @@ function listBackupRecords(): void {
   }
 
   console.log(chalk.bold("\nAvailable rollback records:\n"));
-  console.log(
-    chalk.dim(
-      `  ${"ID".padEnd(20)} ${"Type".padEnd(20)} ${"Package".padEnd(20)} ${"Date".padEnd(22)} Items`
-    )
-  );
-  console.log(chalk.dim("  " + "─".repeat(90)));
-
-  for (const record of manifest.records) {
-    const date = new Date(record.createdAt).toLocaleString();
-    const typeLabel = formatInstallType(record.installType);
-    const itemCount = record.items.length;
-
-    console.log(
-      `  ${chalk.cyan(record.id.padEnd(20))} ${typeLabel.padEnd(20)} ${chalk.white(record.packageName.padEnd(20))} ${chalk.dim(date.padEnd(22))} ${itemCount} backup(s)`
-    );
-  }
+  printRecordTable(manifest.records);
 
   console.log();
   console.log(chalk.dim("  Usage:"));
-  console.log(chalk.dim("    soulhub rollback              # Rollback last installation"));
-  console.log(chalk.dim("    soulhub rollback --id <id>    # Rollback to a specific record"));
+  console.log(chalk.dim("    soulhub rollback              # Interactive: select a record to rollback"));
+  console.log(chalk.dim("    soulhub rollback --last 1     # Rollback the latest installation"));
+  console.log(chalk.dim("    soulhub rollback --last 2     # Rollback the 2nd latest installation"));
+  console.log(chalk.dim("    soulhub rollback --id <id>    # Rollback to a specific record by ID"));
   console.log();
 }
 
 /**
- * 执行回滚操作
+ * 打印备份记录表格（带序号）
  */
-async function performRollback(
-  recordId?: string,
-  clawDir?: string
-): Promise<void> {
+function printRecordTable(records: BackupRecord[]): void {
+  console.log(
+    chalk.dim(
+      `  ${"#".padEnd(4)} ${"ID".padEnd(20)} ${"Type".padEnd(20)} ${"Package".padEnd(20)} ${"Claw".padEnd(14)} ${"Date".padEnd(22)} Items`
+    )
+  );
+  console.log(chalk.dim("  " + "─".repeat(108)));
+
+  records.forEach((record, index) => {
+    const date = new Date(record.createdAt).toLocaleString();
+    const typeLabel = formatInstallType(record.installType);
+    const itemCount = record.items.length;
+    const clawBrand = detectClawBrandFromDir(record.clawDir);
+
+    console.log(
+      `  ${chalk.yellow(String(index + 1).padEnd(4))} ${chalk.cyan(record.id.padEnd(20))} ${typeLabel.padEnd(20)} ${chalk.white(record.packageName.padEnd(20))} ${chalk.dim(clawBrand.padEnd(14))} ${chalk.dim(date.padEnd(22))} ${itemCount} backup(s)`
+    );
+  });
+}
+
+/**
+ * 交互式回滚：展示记录列表，让用户选择要回滚的记录
+ */
+async function interactiveRollback(clawDir?: string): Promise<void> {
+  const manifest = loadBackupManifest();
+
+  if (manifest.records.length === 0) {
+    console.log(chalk.yellow("No backup records found. Nothing to rollback."));
+    console.log(chalk.dim("  Backup records are created automatically when you install agents."));
+    return;
+  }
+
+  // 展示记录列表
+  console.log(chalk.bold("\n  Select a record to rollback:\n"));
+  printRecordTable(manifest.records);
+  console.log();
+
+  // 交互式选择
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const selected = await new Promise<number | null>((resolve) => {
+    rl.question(`  Enter number to rollback (1-${manifest.records.length}), or 'q' to cancel: `, (answer) => {
+      rl.close();
+      const trimmed = answer.trim().toLowerCase();
+      if (trimmed === "q" || trimmed === "quit" || trimmed === "") {
+        resolve(null);
+        return;
+      }
+      const idx = parseInt(trimmed, 10);
+      if (idx >= 1 && idx <= manifest.records.length) {
+        resolve(idx);
+      } else {
+        resolve(null);
+      }
+    });
+  });
+
+  if (selected === null) {
+    console.log(chalk.dim("  Rollback cancelled."));
+    return;
+  }
+
+  const record = manifest.records[selected - 1];
+  console.log();
+  console.log(chalk.dim(`  Selected: ${chalk.cyan(record.id)} (${record.packageName})`));
+
+  // 显示回滚详情并确认
+  printRollbackDetails(record);
+
+  const confirmed = await promptConfirmRollback();
+  if (!confirmed) {
+    console.log(chalk.dim("  Rollback cancelled."));
+    return;
+  }
+
+  await executeRollback(record, clawDir);
+}
+
+/**
+ * 按索引回滚（--last <n>）
+ */
+async function performRollbackByIndex(n: number, clawDir?: string, skipConfirm: boolean = false): Promise<void> {
   const manifest = loadBackupManifest();
 
   if (manifest.records.length === 0) {
@@ -97,31 +171,142 @@ async function performRollback(
     return;
   }
 
-  // 查找目标记录
-  let record: BackupRecord | undefined;
-  if (recordId) {
-    record = manifest.records.find((r) => r.id === recordId);
-    if (!record) {
-      console.error(chalk.red(`Backup record "${recordId}" not found.`));
-      console.log(chalk.dim("  Use 'soulhub rollback --list' to see available records."));
+  if (n < 1 || n > manifest.records.length) {
+    console.error(chalk.red(`Invalid index: ${n}. Available range: 1-${manifest.records.length}`));
+    console.log(chalk.dim("  Use 'soulhub rollback --list' to see all available records."));
+    return;
+  }
+
+  const record = manifest.records[n - 1];
+  console.log(
+    chalk.dim(
+      `\n  Rolling back #${n}: ${chalk.cyan(record.id)} (${record.packageName})`
+    )
+  );
+
+  printRollbackDetails(record);
+  if (!skipConfirm) {
+    const rl2 = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    const confirmed = await new Promise<boolean>((resolve) => {
+      rl2.question(`  ${chalk.yellow("⚠")} Proceed with rollback? (Y/n) `, (answer) => {
+        rl2.close();
+        const trimmed = answer.trim().toLowerCase();
+        resolve(trimmed === "" || trimmed === "y" || trimmed === "yes");
+      });
+    });
+    if (!confirmed) {
+      console.log(chalk.dim("  Rollback cancelled."));
       return;
     }
   } else {
-    record = manifest.records[0]; // 最近一条
-    console.log(
-      chalk.dim(
-        `Rolling back last installation: ${chalk.cyan(record.id)} (${record.packageName})`
-      )
-    );
+    console.log(chalk.dim("  Auto-confirmed with --yes flag."));
+  }
+  await executeRollback(record, clawDir);
+}
+
+/**
+ * 按 ID 回滚（--id <id>）
+ */
+async function performRollback(recordId: string, clawDir?: string, skipConfirm: boolean = false): Promise<void> {
+  const manifest = loadBackupManifest();
+
+  if (manifest.records.length === 0) {
+    console.log(chalk.yellow("No backup records found. Nothing to rollback."));
+    return;
   }
 
+  const record = manifest.records.find((r) => r.id === recordId);
+  if (!record) {
+    console.error(chalk.red(`Backup record "${recordId}" not found.`));
+    console.log(chalk.dim("  Use 'soulhub rollback --list' to see available records."));
+    return;
+  }
+
+  console.log(
+    chalk.dim(
+      `\n  Rolling back: ${chalk.cyan(record.id)} (${record.packageName})`
+    )
+  );
+
+  printRollbackDetails(record);
+  if (!skipConfirm) {
+    const confirmed = await promptConfirmRollback();
+    if (!confirmed) {
+      console.log(chalk.dim("  Rollback cancelled."));
+      return;
+    }
+  } else {
+    console.log(chalk.dim("  Auto-confirmed with --yes flag."));
+  }
+  await executeRollback(record, clawDir);
+}
+
+/**
+ * 打印回滚详情
+ */
+function printRollbackDetails(record: BackupRecord): void {
+  console.log();
+  console.log(chalk.dim("  Rollback details:"));
+  console.log(chalk.dim(`    Package:    ${record.packageName}`));
+  console.log(chalk.dim(`    Type:       ${formatInstallType(record.installType)}`));
+  console.log(chalk.dim(`    Claw dir:   ${record.clawDir}`));
+  console.log(chalk.dim(`    Date:       ${new Date(record.createdAt).toLocaleString()}`));
+
+  if (record.items.length > 0) {
+    console.log(chalk.dim(`    Backups to restore:`));
+    for (const item of record.items) {
+      const methodLabel = item.method === "mv" ? "move back" : "copy back";
+      console.log(chalk.dim(`      - ${item.agentId} (${item.role}, ${methodLabel})`));
+    }
+  }
+
+  if (record.installedWorkerIds.length > 0) {
+    console.log(chalk.dim(`    Workers to remove: ${record.installedWorkerIds.join(", ")}`));
+  }
+  if (record.installedMainAgent) {
+    console.log(chalk.dim(`    Main agent to revert: ${record.installedMainAgent}`));
+  }
+  console.log();
+}
+
+/**
+ * 确认回滚操作
+ */
+async function promptConfirmRollback(): Promise<boolean> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise<boolean>((resolve) => {
+    rl.question(`  ${chalk.yellow("⚠")} Proceed with rollback? (Y/n) `, (answer) => {
+      rl.close();
+      const trimmed = answer.trim().toLowerCase();
+      if (trimmed === "" || trimmed === "y" || trimmed === "yes") {
+        resolve(true);
+      } else {
+        resolve(false);
+      }
+    });
+  });
+}
+
+/**
+ * 执行回滚操作（核心逻辑）
+ */
+async function executeRollback(record: BackupRecord, clawDir?: string): Promise<void> {
   const spinner = createSpinner(
     `Rolling back ${chalk.cyan(record.packageName)}...`
   ).start();
 
+    // 使用记录中存储的 clawDir，如果用户指定了 --claw-type 则覆盖
   const resolvedClawDir = clawDir
     ? (findOpenClawDir(clawDir) || record.clawDir)
-    : (await promptSelectClawDir() || record.clawDir);
+    : record.clawDir;
+
   if (!resolvedClawDir || !fs.existsSync(resolvedClawDir)) {
     spinner.fail(`OpenClaw/LightClaw directory not found: ${record.clawDir}`);
     return;
@@ -187,18 +372,21 @@ async function performRollback(
 
     if (item.method === "mv") {
       // mv 备份：将备份目录移回原位
-      // 如果原位已有目录，先删除
       if (fs.existsSync(item.originalPath)) {
         fs.rmSync(item.originalPath, { recursive: true, force: true });
       }
-      // 确保父目录存在
       fs.mkdirSync(path.dirname(item.originalPath), { recursive: true });
-      fs.renameSync(item.backupPath, item.originalPath);
+      // 跨设备 mv 兼容：先尝试 rename，失败则 cp + rm
+      try {
+        fs.renameSync(item.backupPath, item.originalPath);
+      } catch {
+        fs.cpSync(item.backupPath, item.originalPath, { recursive: true });
+        fs.rmSync(item.backupPath, { recursive: true, force: true });
+      }
       logger.info(`Restored (mv back)`, { from: item.backupPath, to: item.originalPath });
     } else {
       // cp 备份：从备份目录复制回去
       if (fs.existsSync(item.originalPath)) {
-        // 清空原目录
         const entries = fs.readdirSync(item.originalPath);
         for (const entry of entries) {
           fs.rmSync(path.join(item.originalPath, entry), { recursive: true, force: true });
@@ -216,7 +404,8 @@ async function performRollback(
   }
 
   // 5. 从 manifest 中移除已回滚的记录
-  manifest.records = manifest.records.filter((r) => r.id !== record!.id);
+  const manifest = loadBackupManifest();
+  manifest.records = manifest.records.filter((r) => r.id !== record.id);
   saveBackupManifest(manifest);
 
   spinner.succeed(
@@ -256,4 +445,15 @@ function formatInstallType(type: BackupRecord["installType"]): string {
     default:
       return type;
   }
+}
+
+/**
+ * 从 clawDir 路径推断品牌名称（用于显示，不依赖目录存在）
+ */
+function detectClawBrandFromDir(clawDir: string): string {
+  const dirName = path.basename(clawDir).toLowerCase();
+  if (dirName.includes("lightclaw")) {
+    return "LightClaw";
+  }
+  return "OpenClaw";
 }

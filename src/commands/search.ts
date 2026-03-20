@@ -7,7 +7,8 @@ export const searchCommand = new Command("search")
   .description("Search for agents in the SoulHub registry")
   .argument("[query]", "Search query (matches name, description, tags)")
   .option("-c, --category <category>", "Filter by category")
-  .option("-l, --limit <number>", "Max results to show", "20")
+  .option("-n, --limit <number>", "Max results to show", "20")
+  .option("--json", "Output results in JSON format")
   .action(async (query: string | undefined, options) => {
     try {
       const index = await fetchIndex();
@@ -37,12 +38,30 @@ export const searchCommand = new Command("search")
       const shown = agents.slice(0, limit);
 
       if (shown.length === 0) {
-        console.log(chalk.yellow("No agents found matching your query."));
-        if (query) {
-          console.log(
-            chalk.dim(`  Try: soulhub search (without query to list all)`)
-          );
+        if (options.json) {
+          console.log(JSON.stringify([], null, 2));
+        } else {
+          console.log(chalk.yellow("No agents found matching your query."));
+          if (query) {
+            console.log(
+              chalk.dim(`  Try: soulhub search (without query to list all)`)
+            );
+          }
         }
+        return;
+      }
+
+      // JSON 输出模式
+      if (options.json) {
+        const jsonOutput = shown.map((a) => ({
+          name: a.name,
+          displayName: a.displayName,
+          version: a.version,
+          description: a.description,
+          category: a.category,
+          tags: a.tags,
+        }));
+        console.log(JSON.stringify(jsonOutput, null, 2));
         return;
       }
 

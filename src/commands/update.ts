@@ -8,6 +8,10 @@ import {
   fetchIndex,
   downloadAgentPackage,
   copyAgentFilesFromPackage,
+  backupAgentWorkspace,
+  createBackupRecord,
+  addBackupItem,
+  commitBackupRecord,
 } from "../utils.js";
 import { logger } from "../logger.js";
 
@@ -52,8 +56,24 @@ export const updateCommand = new Command("update")
 
         spinner.text = `Updating ${chalk.cyan(installed.name)} (${installed.version} → ${remote.version})...`;
 
-        // 下载新版 agent tar.gz 包并解压覆盖
+        // 备份当前 workspace（更新失败可回滚）
         const workspaceDir = installed.workspace;
+        const backupDir = backupAgentWorkspace(workspaceDir);
+        if (backupDir) {
+          // 创建备份记录
+          const backupRecord = createBackupRecord("single-agent", installed.name, workspaceDir);
+          addBackupItem(backupRecord, {
+            originalPath: workspaceDir,
+            backupPath: backupDir,
+            method: "cp",
+            role: "worker",
+            agentId: installed.name,
+          });
+          commitBackupRecord(backupRecord);
+          logger.info(`Update backup created for ${installed.name}`, { backupDir });
+        }
+
+        // 下载新版 agent tar.gz 包并解压覆盖
         if (!fs.existsSync(workspaceDir)) {
           fs.mkdirSync(workspaceDir, { recursive: true });
         }
