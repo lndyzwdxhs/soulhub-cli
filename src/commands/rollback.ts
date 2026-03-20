@@ -2,7 +2,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
+import { select, confirm as inquirerConfirm } from "@inquirer/prompts";
 import { createSpinner } from "../spinner.js";
 import { logger } from "../logger.js";
 import {
@@ -112,44 +112,34 @@ async function interactiveRollback(clawDir?: string): Promise<void> {
   }
 
   // 展示记录列表
-  console.log(chalk.bold("\n  Select a record to rollback:\n"));
+  console.log(chalk.bold("\n  Available rollback records:\n"));
   printRecordTable(manifest.records);
   console.log();
 
-  // 交互式选择
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  const selected = await new Promise<number | null>((resolve) => {
-    rl.question(`  Enter number to rollback (1-${manifest.records.length}), or 'q' to cancel: `, (answer) => {
-      rl.close();
-      const trimmed = answer.trim().toLowerCase();
-      if (trimmed === "q" || trimmed === "quit" || trimmed === "") {
-        resolve(null);
-        return;
-      }
-      const idx = parseInt(trimmed, 10);
-      if (idx >= 1 && idx <= manifest.records.length) {
-        resolve(idx);
-      } else {
-        resolve(null);
-      }
+  // 上下键选择
+  let selected: BackupRecord;
+  try {
+    selected = await select({
+      message: "Select a record to rollback:",
+      choices: manifest.records.map((record, index) => {
+        const date = new Date(record.createdAt).toLocaleString();
+        const clawBrand = detectClawBrandFromDir(record.clawDir);
+        return {
+          name: `#${index + 1}  ${record.id}  ${record.packageName}  (${clawBrand}, ${date})`,
+          value: record,
+        };
+      }),
     });
-  });
-
-  if (selected === null) {
+  } catch {
     console.log(chalk.dim("  Rollback cancelled."));
     return;
   }
 
-  const record = manifest.records[selected - 1];
   console.log();
-  console.log(chalk.dim(`  Selected: ${chalk.cyan(record.id)} (${record.packageName})`));
+  console.log(chalk.dim(`  Selected: ${chalk.cyan(selected.id)} (${selected.packageName})`));
 
   // 显示回滚详情并确认
-  printRollbackDetails(record);
+  printRollbackDetails(selected);
 
   const confirmed = await promptConfirmRollback();
   if (!confirmed) {
@@ -157,7 +147,7 @@ async function interactiveRollback(clawDir?: string): Promise<void> {
     return;
   }
 
-  await executeRollback(record, clawDir);
+  await executeRollback(selected, clawDir);
 }
 
 /**
@@ -186,17 +176,15 @@ async function performRollbackByIndex(n: number, clawDir?: string, skipConfirm: 
 
   printRollbackDetails(record);
   if (!skipConfirm) {
-    const rl2 = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    const confirmed = await new Promise<boolean>((resolve) => {
-      rl2.question(`  ${chalk.yellow("⚠")} Proceed with rollback? (Y/n) `, (answer) => {
-        rl2.close();
-        const trimmed = answer.trim().toLowerCase();
-        resolve(trimmed === "" || trimmed === "y" || trimmed === "yes");
+    let confirmed: boolean;
+    try {
+      confirmed = await inquirerConfirm({
+        message: `${chalk.yellow("⚠")} Proceed with rollback?`,
+        default: true,
       });
-    });
+    } catch {
+      confirmed = false;
+    }
     if (!confirmed) {
       console.log(chalk.dim("  Rollback cancelled."));
       return;
@@ -276,22 +264,15 @@ function printRollbackDetails(record: BackupRecord): void {
  * 确认回滚操作
  */
 async function promptConfirmRollback(): Promise<boolean> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise<boolean>((resolve) => {
-    rl.question(`  ${chalk.yellow("⚠")} Proceed with rollback? (Y/n) `, (answer) => {
-      rl.close();
-      const trimmed = answer.trim().toLowerCase();
-      if (trimmed === "" || trimmed === "y" || trimmed === "yes") {
-        resolve(true);
-      } else {
-        resolve(false);
-      }
+  try {
+    return await inquirerConfirm({
+      message: `${chalk.yellow("⚠")} Proceed with rollback?`,
+      default: true,
     });
-  });
+  } catch {
+    // 用户按 Ctrl+C 取消
+    return false;
+  }
 }
 
 /**

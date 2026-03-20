@@ -4,7 +4,7 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
-import readline from "node:readline";
+import { select, checkbox, confirm as inquirerConfirm } from "@inquirer/prompts";
 import yaml from "js-yaml";
 import { extract as tarExtract } from "tar";
 import type {
@@ -178,13 +178,11 @@ export function findOpenClawDir(customDir?: string): string | null {
     return resolved;
   }
 
-  // 3. 默认路径候选列表（同时支持 openclaw 和 lightclaw）
+  // 3. 默认路径候选列表：只检测 ~/ 目录下（不扫描 cwd，避免嵌套误判）
   const home = process.env.HOME || "~";
   const candidates = [
     path.join(home, ".openclaw"),
     path.join(home, ".lightclaw"),
-    path.join(process.cwd(), ".openclaw"),
-    path.join(process.cwd(), ".lightclaw"),
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -221,23 +219,13 @@ export function findAllClawDirs(customDir?: string): string[] {
     return [resolved];
   }
 
-  // 3. 默认候选列表，返回所有存在的目录（去重）
+  // 3. 默认候选列表：只检测 ~/ 目录下（不扫描 cwd，避免嵌套误判）
   const home = process.env.HOME || "~";
   const candidates = [
     path.join(home, ".openclaw"),
     path.join(home, ".lightclaw"),
-    path.join(process.cwd(), ".openclaw"),
-    path.join(process.cwd(), ".lightclaw"),
   ];
-  const existing = candidates.filter((c) => fs.existsSync(c));
-  // 使用 realpath 去重，避免同一目录以不同路径形式重复出现
-  const seen = new Set<string>();
-  return existing.filter((c) => {
-    const real = fs.realpathSync(c);
-    if (seen.has(real)) return false;
-    seen.add(real);
-    return true;
-  });
+  return candidates.filter((c) => fs.existsSync(c));
 }
 
 /**
@@ -255,33 +243,20 @@ export async function promptSelectClawDir(customDir?: string): Promise<string | 
     return dirs[0];
   }
 
-  // 多个候选目录，让用户选择
-  console.log();
-  console.log("  Detected multiple Claw installations:");
-  console.log();
-  dirs.forEach((dir, index) => {
-    const brand = detectClawBrand(dir);
-    console.log(`    ${index + 1}) ${brand}  ${dir}`);
-  });
-  console.log();
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise<string | null>((resolve) => {
-    rl.question(`  Please select target (1-${dirs.length}): `, (answer) => {
-      rl.close();
-      const idx = parseInt(answer.trim(), 10);
-      if (idx >= 1 && idx <= dirs.length) {
-        resolve(dirs[idx - 1]);
-      } else {
-        console.log("  Invalid selection, operation cancelled.");
-        resolve(null);
-      }
+  // 多个候选目录，使用上下键选择
+  try {
+    const selected = await select({
+      message: "Select target Claw installation:",
+      choices: dirs.map((dir) => {
+        const brand = detectClawBrand(dir);
+        return { name: `${brand}  ${dir}`, value: dir };
+      }),
     });
-  });
+    return selected;
+  } catch {
+    // 用户按 Ctrl+C 取消
+    return null;
+  }
 }
 
 /**
@@ -880,32 +855,20 @@ export function commitBackupRecord(record: BackupRecord): void {
  * @returns "main" 或 "worker"，用户取消时返回 null
  */
 export async function promptSelectRole(): Promise<"main" | "worker" | null> {
-  console.log();
-  console.log("  ? Install as:");
-  console.log();
-  console.log("    1) 👷  Worker agent  (子Agent，安装到 workspace-<name>/ 目录)");
-  console.log("    2) 👑  Main agent    (主Agent，安装到 workspace/ 目录)");
-  console.log();
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise<"main" | "worker" | null>((resolve) => {
-    rl.question("  Please select (1-2) [1]: ", (answer) => {
-      rl.close();
-      const trimmed = answer.trim();
-      if (trimmed === "" || trimmed === "1") {
-        resolve("worker");
-      } else if (trimmed === "2") {
-        resolve("main");
-      } else {
-        console.log("  Invalid selection, operation cancelled.");
-        resolve(null);
-      }
+  try {
+    const selected = await select({
+      message: "Install as:",
+      choices: [
+        { name: "👷  Worker agent  (子Agent，安装到 workspace-<name>/ 目录)", value: "worker" as const },
+        { name: "👑  Main agent    (主Agent，安装到 workspace/ 目录)", value: "main" as const },
+      ],
+      default: "worker",
     });
-  });
+    return selected;
+  } catch {
+    // 用户按 Ctrl+C 取消
+    return null;
+  }
 }
 
 /**
@@ -927,55 +890,24 @@ export async function promptMultiSelectClawDirs(): Promise<string[]> {
     return dirs;
   }
 
-  // 多个候选目录，让用户多选
-  console.log();
-  console.log("  ? Select target Claw installations (multiple allowed):");
-  console.log();
-  dirs.forEach((dir, index) => {
-    const brand = detectClawBrand(dir);
-    console.log(`    ${index + 1}) ${brand}  ${dir}`);
-  });
-  console.log();
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise<string[]>((resolve) => {
-    const allNums = dirs.map((_, i) => String(i + 1)).join(",");
-    rl.question(`  Enter numbers separated by comma (e.g. 1,2) [${allNums}]: `, (answer) => {
-      rl.close();
-      const trimmed = answer.trim();
-
-      // 默认选择所有
-      if (trimmed === "") {
-        resolve(dirs);
-        return;
-      }
-
-      const parts = trimmed.split(",").map((s) => s.trim());
-      const selected: string[] = [];
-      for (const part of parts) {
-        const idx = parseInt(part, 10);
-        if (idx >= 1 && idx <= dirs.length) {
-          const dir = dirs[idx - 1];
-          if (!selected.includes(dir)) {
-            selected.push(dir);
-          }
-        } else {
-          console.log(`  Invalid selection: ${part}, operation cancelled.`);
-          resolve([]);
-          return;
-        }
-      }
-
-      if (selected.length === 0) {
-        console.log("  No claw selected, operation cancelled.");
-      }
-      resolve(selected);
+  // 多个候选目录，使用上下键多选（空格选中，回车确认）
+  try {
+    const selected = await checkbox({
+      message: "Select target Claw installations (space to toggle, enter to confirm):",
+      choices: dirs.map((dir) => {
+        const brand = detectClawBrand(dir);
+        return { name: `${brand}  ${dir}`, value: dir, checked: true };
+      }),
     });
-  });
+
+    if (selected.length === 0) {
+      console.log("  No claw selected, operation cancelled.");
+    }
+    return selected;
+  } catch {
+    // 用户按 Ctrl+C 取消
+    return [];
+  }
 }
 
 /**
@@ -985,25 +917,15 @@ export async function promptMultiSelectClawDirs(): Promise<string[]> {
  * @returns true = 确认，false = 取消
  */
 export async function promptConfirm(message: string, defaultYes: boolean = true): Promise<boolean> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  const hint = defaultYes ? "Y/n" : "y/N";
-  return new Promise<boolean>((resolve) => {
-    rl.question(`  ${message} (${hint}) `, (answer) => {
-      rl.close();
-      const trimmed = answer.trim().toLowerCase();
-      if (trimmed === "") {
-        resolve(defaultYes);
-      } else if (trimmed === "y" || trimmed === "yes") {
-        resolve(true);
-      } else {
-        resolve(false);
-      }
+  try {
+    return await inquirerConfirm({
+      message,
+      default: defaultYes,
     });
-  });
+  } catch {
+    // 用户按 Ctrl+C 取消
+    return false;
+  }
 }
 
 /**
